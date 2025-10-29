@@ -1,68 +1,67 @@
-// Public API containing the full UIElement functionality migrated from src/lib/UIElement.h
+// Concrete implementation details for UIElement (impl-only).
 #pragma once
-#include "Types.h"
 #include <string>
 #include <map>
+#include <cstdint>
 #include <functional>
 
-namespace BangUI::API {
-
-// Tooltip configuration
-struct TooltipConfig {
-    std::string text;
-    int delay = 500; // milliseconds
-    std::string position = "auto"; // top, bottom, left, right, auto
-    int maxWidth = 300; // pixels
+struct Color {
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+    uint8_t a = 255;
+    Color() = default;
+    Color(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255)
+        : r(red), g(green), b(blue), a(alpha) {}
 };
 
-// UIElement: Base class for all UI elements — full concrete API surface.
+enum class SizeMode { Absolute, Auto, Stretch };
+enum class HDock { Left, Center, Right, None };
+enum class VDock { Top, Center, Bottom, None };
+
+struct TooltipConfig {
+    std::string text;
+    int delay = 500;
+    std::string position = "auto";
+    int maxWidth = 300;
+};
+
 class UIElement {
 public:
-    // Identity
     std::string id;
     std::string type;
-    std::string className; // For BML styling (e.g., "primary", "danger")
+    std::string className;
 
-    // === LAYOUT & POSITIONING ===
+    HDock hDock = HDock::None;
+    VDock vDock = VDock::None;
 
-    // Docking/Alignment
-    HDock hDock = HDock::None;   // Horizontal docking
-    VDock vDock = VDock::None;   // Vertical docking
-
-    // Size
     SizeMode widthMode = SizeMode::Absolute;
     SizeMode heightMode = SizeMode::Absolute;
     float width = 100.0f;
     float height = 100.0f;
 
-    // Position
     float x = 0.0f;
     float y = 0.0f;
 
-    // Padding
     float paddingTop = 0.0f;
     float paddingBottom = 0.0f;
     float paddingLeft = 0.0f;
     float paddingRight = 0.0f;
 
-    // Margin
     float marginTop = 0.0f;
     float marginBottom = 0.0f;
     float marginLeft = 0.0f;
     float marginRight = 0.0f;
 
-    // Visual
-    Color backgroundColor = Color{255,255,255,255};
+    Color backgroundColor = Color(255,255,255,255);
     std::string src;
     float borderWidth = 0.0f;
-    Color borderColor = Color{0,0,0,255};
+    Color borderColor = Color(0,0,0,255);
     float cornerRadius = 0.0f;
 
-    // Opacity & z
     float opacity = 1.0f;
     int zIndex = 0;
 
-    // Interaction
     bool visible = true;
     bool enabled = true;
     bool focusable = false;
@@ -76,16 +75,13 @@ public:
     std::function<void()> onFocus = nullptr;
     std::function<void()> onBlur = nullptr;
 
-    // Hierarchy
     UIElement* parent = nullptr;
 
-    // Safe content insets
     float contentLeft = 0.0f;
     float contentTop = 0.0f;
     float contentRight = 0.0f;
     float contentBottom = 0.0f;
 
-    // Runtime state
     bool isBeingDragged = false;
     float dragOffsetX = 0.0f;
     float dragOffsetY = 0.0f;
@@ -118,28 +114,3 @@ public:
     float getSafeContentRight() const { return x + width - contentRight - paddingRight; }
     float getSafeContentBottom() const { return y + height - contentBottom - paddingBottom; }
 };
-
-} // namespace BangUI::API
-
-// Backwards-compatibility aliases in the BangUI namespace so existing
-// implementation headers (which live in BangUI::impl) can refer to
-// UIElement, Color, and the enums without fully qualifying API::.
-namespace BangUI {
-    using API::Color;
-    using API::SizeMode;
-    using API::HDock;
-    using API::VDock;
-    using API::TooltipConfig;
-    using API::UIElement;
-}
-
-// Compatibility: also make some API symbols available at global scope for
-// existing implementation headers that expect unqualified names like
-// `UIElement` or `Color`. This is a minimal shim and does not create new
-// type definitions (it's a using-declaration only).
-using BangUI::API::UIElement;
-using BangUI::API::Color;
-using BangUI::API::SizeMode;
-using BangUI::API::HDock;
-using BangUI::API::VDock;
-using BangUI::API::TooltipConfig;

@@ -6,9 +6,9 @@
 #include "../api/IRenderer.h"
 #include <memory>
 
-namespace BangUI::Impl {
+namespace BangUI::impl {
 
 std::unique_ptr<API::IUIManager> CreateDefaultUIManager();
 std::unique_ptr<API::IRenderer> CreateDefaultRenderer();
 
-} // namespace BangUI::Impl
+} // namespace BangUI::impl

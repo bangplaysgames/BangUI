@@ -3,12 +3,12 @@ set(SDL3_DIR "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/share/sdl3")
 set(SDL3_image_DIR "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/share/sdl3-image")
 set(SDL3_ttf_DIR "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/share/sdl3-ttf")
 
-file(GLOB SRC_LIB "lib/*.cpp" "lib/*.h")
+file(GLOB SRC_LIB "lib/*.cpp" "lib/*.h" "impl/*.cpp" "impl/*.h")
 # Remove sdl_diligent_demo.cpp from SRC_LIB
 list(REMOVE_ITEM SRC_LIB "${CMAKE_CURRENT_SOURCE_DIR}/lib/sdl_diligent_demo.cpp")
 file(GLOB SRC_MODELS "models/*.cpp" "models/*.h")
 add_library(BangUI_lib ${SRC_LIB} ${SRC_MODELS})
-target_include_directories(BangUI_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib ${CMAKE_CURRENT_SOURCE_DIR}/models "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/include")
+target_include_directories(BangUI_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib ${CMAKE_CURRENT_SOURCE_DIR}/models ${CMAKE_CURRENT_SOURCE_DIR}/impl "${CMAKE_SOURCE_DIR}/../vcpkg/installed/x64-windows/include")
 
 file(GLOB TEST_MAIN "models/test_main.cpp")
 add_executable(BangUI_test_main ${TEST_MAIN})
@@ -69,3 +69,8 @@ add_custom_command(TARGET BangUI_sdl_demo POST_BUILD
         "$<TARGET_FILE_DIR:BangUI_sdl_demo>/zlib1.dll"
     COMMENT "Copying SDL3 DLLs and image codec dependencies to output directory"
 )
+
+# Option: register the SDL demo as the single integration test harness.
+# Note: the demo application is intentionally a manual, interactive test harness and is
+# not registered as an automated CTest test. Human operators should run the demo to
+# validate UI behavior and interactions.

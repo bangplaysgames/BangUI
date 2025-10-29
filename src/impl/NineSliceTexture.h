@@ -65,7 +65,8 @@ public:
         for (int x = 1; x < w - 1; x++) {
             Uint32 pixel = pixels[x];
             Uint8 r, g, b, a;
-            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &a);
+            const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
+            SDL_GetRGBA(pixel, fmt, nullptr, &r, &g, &b, &a);
 
             // Black pixel (RGB near 0) indicates stretchable region
             bool isBlack = (a > 200) && (r < 50) && (g < 50) && (b < 50);
@@ -93,7 +94,8 @@ public:
         for (int y = 1; y < h - 1; y++) {
             Uint32 pixel = pixels[y * pitch];
             Uint8 r, g, b, a;
-            SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(surface->format), nullptr, &r, &g, &b, &a);
+            const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
+            SDL_GetRGBA(pixel, fmt, nullptr, &r, &g, &b, &a);
 
             bool isBlack = (a > 200) && (r < 50) && (g < 50) && (b < 50);
 
@@ -176,54 +178,54 @@ public:
         if (destCenterHeight < 0) destCenterHeight = 0;
 
         // Render 9 patches
-    // Top-left corner
-    renderPatch(renderer,
-           contentLeft, contentTop, leftWidth, topHeight,
-           x, y, destLeftWidth, destTopHeight, alpha);
+        // Top-left corner
+        renderPatch(renderer,
+                contentLeft, contentTop, leftWidth, topHeight,
+                x, y, destLeftWidth, destTopHeight, alpha);
 
         // Top edge (stretched horizontally)
-    renderPatch(renderer,
-           stretchLeft, contentTop, centerWidth, topHeight,
-           x + destLeftWidth, y, destCenterWidth, destTopHeight, alpha);
+        renderPatch(renderer,
+                stretchLeft, contentTop, centerWidth, topHeight,
+                x + destLeftWidth, y, destCenterWidth, destTopHeight, alpha);
 
         // Top-right corner
-    renderPatch(renderer,
-           stretchRight, contentTop, rightWidth, topHeight,
-           x + destLeftWidth + destCenterWidth, y, destRightWidth, destTopHeight, alpha);
+        renderPatch(renderer,
+                stretchRight, contentTop, rightWidth, topHeight,
+                x + destLeftWidth + destCenterWidth, y, destRightWidth, destTopHeight, alpha);
 
         // Left edge (stretched vertically)
-    renderPatch(renderer,
-           contentLeft, stretchTop, leftWidth, centerHeight,
-           x, y + destTopHeight, destLeftWidth, destCenterHeight, alpha);
+        renderPatch(renderer,
+                contentLeft, stretchTop, leftWidth, centerHeight,
+                x, y + destTopHeight, destLeftWidth, destCenterHeight, alpha);
 
         // Center (stretched both ways)
-    renderPatch(renderer,
-           stretchLeft, stretchTop, centerWidth, centerHeight,
-           x + destLeftWidth, y + destTopHeight, destCenterWidth, destCenterHeight, alpha);
+        renderPatch(renderer,
+                stretchLeft, stretchTop, centerWidth, centerHeight,
+                x + destLeftWidth, y + destTopHeight, destCenterWidth, destCenterHeight, alpha);
 
         // Right edge (stretched vertically)
-    renderPatch(renderer,
-           stretchRight, stretchTop, rightWidth, centerHeight,
-           x + destLeftWidth + destCenterWidth, y + destTopHeight,
-           destRightWidth, destCenterHeight, alpha);
+        renderPatch(renderer,
+                stretchRight, stretchTop, rightWidth, centerHeight,
+                x + destLeftWidth + destCenterWidth, y + destTopHeight,
+                destRightWidth, destCenterHeight, alpha);
 
         // Bottom-left corner
-    renderPatch(renderer,
-           contentLeft, stretchBottom, leftWidth, bottomHeight,
-           x, y + destTopHeight + destCenterHeight,
-           destLeftWidth, destBottomHeight, alpha);
+        renderPatch(renderer,
+                contentLeft, stretchBottom, leftWidth, bottomHeight,
+                x, y + destTopHeight + destCenterHeight,
+                destLeftWidth, destBottomHeight, alpha);
 
         // Bottom edge (stretched horizontally)
-    renderPatch(renderer,
-           stretchLeft, stretchBottom, centerWidth, bottomHeight,
-           x + destLeftWidth, y + destTopHeight + destCenterHeight,
-           destCenterWidth, destBottomHeight, alpha);
+        renderPatch(renderer,
+                stretchLeft, stretchBottom, centerWidth, bottomHeight,
+                x + destLeftWidth, y + destTopHeight + destCenterHeight,
+                destCenterWidth, destBottomHeight, alpha);
 
         // Bottom-right corner
-    renderPatch(renderer,
-           stretchRight, stretchBottom, rightWidth, bottomHeight,
-           x + destLeftWidth + destCenterWidth, y + destTopHeight + destCenterHeight,
-           destRightWidth, destBottomHeight, alpha);
+        renderPatch(renderer,
+                stretchRight, stretchBottom, rightWidth, bottomHeight,
+                x + destLeftWidth + destCenterWidth, y + destTopHeight + destCenterHeight,
+                destRightWidth, destBottomHeight, alpha);
     }
 
 private:

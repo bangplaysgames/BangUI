@@ -89,13 +89,13 @@ public:
         SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
         if (!tex) {
             std::cerr << "SDL_CreateTextureFromSurface failed: " << SDL_GetError() << std::endl;
-        SDL_DestroySurface(surf);
+            SDL_DestroySurface(surf);
             return nullptr;
         }
 
         outW = surf->w;
         outH = surf->h;
-    SDL_DestroySurface(surf);
+        SDL_DestroySurface(surf);
 
         // Cache
         textCache[key] = tex;

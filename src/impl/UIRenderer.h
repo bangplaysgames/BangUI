@@ -3,11 +3,13 @@
 #include <cmath>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <string>
 #include <vector>
 #include "../models/Window.h"
 #include "../models/Panel.h"
 #include "TextureManager.h"
 #include "FontManager.h"
+#include "NineSliceTexture.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -479,16 +481,59 @@ public:
             TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
             if (font) {
                 SDL_Color textColor = {255,255,255, static_cast<Uint8>(255 * win->opacity)};
-                int textW = 0, textH = 0;
-                SDL_Texture* titleTex = fontManager->getTextTexture(renderer, font, win->title, textColor, textW, textH);
-                if (titleTex) {
-                    // Draw title left-aligned with some padding
-                    float tx = x + 8.0f;
-                    float ty = y + (Window::TITLE_BAR_HEIGHT - textH) / 2.0f;
-                    SDL_FRect dst = {tx, ty, static_cast<float>(textW), static_cast<float>(textH)};
-                    SDL_SetTextureBlendMode(titleTex, SDL_BLENDMODE_BLEND);
-                    SDL_SetTextureAlphaMod(titleTex, static_cast<Uint8>(255 * win->opacity));
-                    SDL_RenderTexture(renderer, titleTex, nullptr, &dst);
+
+                // Compute available width for title. Reserve space for close button if present,
+                // and some padding on left and right.
+                float leftPadding = 8.0f;
+                float rightPadding = 8.0f;
+                float reservedForClose = win->closeable ? (Window::CLOSE_BUTTON_SIZE + Window::CLOSE_BUTTON_MARGIN * 2) : 0.0f;
+                float availableW = w - leftPadding - rightPadding - reservedForClose;
+
+                // If available width is too small, skip text
+                if (availableW > 8.0f) {
+                    // Quick check: if the whole title fits, render it directly
+                    int wholeW = 0, wholeH = 0;
+                    SDL_Texture* wholeTex = fontManager->getTextTexture(renderer, font, win->title, textColor, wholeW, wholeH);
+                    if (wholeTex && static_cast<float>(wholeW) <= availableW) {
+                        float tx = x + leftPadding;
+                        float ty = y + (Window::TITLE_BAR_HEIGHT - wholeH) / 2.0f;
+                        SDL_FRect dst = {tx, ty, static_cast<float>(wholeW), static_cast<float>(wholeH)};
+                        SDL_SetTextureBlendMode(wholeTex, SDL_BLENDMODE_BLEND);
+                        SDL_SetTextureAlphaMod(wholeTex, static_cast<Uint8>(255 * win->opacity));
+                        SDL_RenderTexture(renderer, wholeTex, nullptr, &dst);
+                    } else {
+                        // Need to truncate; binary-search the longest prefix that fits when appended with ellipsis
+                        std::string title = win->title;
+                        std::string ell = "...";
+                        int low = 0, high = (int)title.size();
+                        std::string best = "";
+                        while (low <= high) {
+                            int mid = (low + high) / 2;
+                            std::string candidate = title.substr(0, mid) + ell;
+                            int cw = 0, ch = 0;
+                            SDL_Texture* candTex = fontManager->getTextTexture(renderer, font, candidate, textColor, cw, ch);
+                            if (candTex && static_cast<float>(cw) <= availableW) {
+                                best = candidate;
+                                low = mid + 1;
+                            } else {
+                                high = mid - 1;
+                            }
+                        }
+                        if (best.empty()) {
+                            // Nothing fits - try single-character ellipsis fallback
+                            best = ell;
+                        }
+                        int bw = 0, bh = 0;
+                        SDL_Texture* bestTex = fontManager->getTextTexture(renderer, font, best, textColor, bw, bh);
+                        if (bestTex) {
+                            float tx = x + leftPadding;
+                            float ty = y + (Window::TITLE_BAR_HEIGHT - bh) / 2.0f;
+                            SDL_FRect dst = {tx, ty, static_cast<float>(bw), static_cast<float>(bh)};
+                            SDL_SetTextureBlendMode(bestTex, SDL_BLENDMODE_BLEND);
+                            SDL_SetTextureAlphaMod(bestTex, static_cast<Uint8>(255 * win->opacity));
+                            SDL_RenderTexture(renderer, bestTex, nullptr, &dst);
+                        }
+                    }
                 }
             }
         }

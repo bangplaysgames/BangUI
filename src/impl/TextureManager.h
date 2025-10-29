@@ -1,10 +1,10 @@
 #pragma once
+#include "../impl/NineSliceTexture.h"
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
 #include <string>
 #include <map>
 #include <iostream>
-#include "NineSliceTexture.h"
 
 // TextureManager: Handles loading, caching, and cleanup of SDL textures
 // Uses RGBA8 format for proper alpha channel support

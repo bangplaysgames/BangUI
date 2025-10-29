@@ -1,11 +1,13 @@
 #pragma once
-#include "UIElement.h"
+#include "../api/UIElement.h"
 #include <vector>
 #include <map>
 #include <string>
 #include <SDL3_image/SDL_image.h>
 #include <iostream>
 
+// Implementation depends on concrete models for Window/Panel which are in the models/ directory
+// These are lightweight and kept as before.
 #include "../models/Window.h"
 #include "../models/Panel.h"
 
@@ -154,53 +156,26 @@ public:
 
         for (UIElement* child : children) {
             if (!child) continue;
-
-            // If the child was manually positioned by the user, preserve its absolute
-            // x/y while still allowing size computation. computeElementLayout may set
-            // x/y based on docking; save/restore to avoid overwriting the user's position.
             if (child->manualPosition) {
-#ifdef LAYOUT_DEBUG
-                std::cout << "[Layout] Parent(" << container->id << ") safeLeft=" << safeLeft << " safeTop=" << safeTop
-                          << " child(" << child->id << ") manual saveX=" << child->x << " saveY=" << child->y << std::endl;
-#endif
-                float savedX = child->x;
-                float savedY = child->y;
-                // Compute sizes (and other layout-affecting properties)
+                // For manual-positioned children we compute layout to update size
+                // but preserve the child-local coordinates (localX/localY) so
+                // that subsequent layout passes don't reposition them.
+                float savedLocalX = child->localX;
+                float savedLocalY = child->localY;
                 computeElementLayout(child, safeW, safeH);
-                // Restore absolute position set by the user
-                child->x = savedX;
-                child->y = savedY;
-
-                // IMPORTANT: do NOT recompute child->localX/localY here from the
-                // absolute position. localX/localY should be the authoritative
-                // local offsets (set when the user began dragging/resizing). If we
-                // recalculate them each frame from the preserved absolute position,
-                // the child will effectively become pinned to world coordinates
-                // and won't move when the parent moves. Use the existing localX/localY.
-#ifdef LAYOUT_DEBUG
-                std::cout << "[Layout] Parent(" << container->id << ") x=" << container->x << " safeLeft=" << safeLeft << " child(" << child->id << ") manual localX=" << child->localX << " localY=" << child->localY << std::endl;
-#endif
+                child->localX = savedLocalX;
+                child->localY = savedLocalY;
             } else {
-                // Normal layout-managed child: ensure child->x/y are local
-                // coordinates before calling computeElementLayout. For elements
-                // with HDock/VDock::None we must initialize a sane local origin
-                // (use margins) so stale absolute positions don't carry over.
+                // Non-manual children get their local coords computed from docking/margins
                 child->x = child->marginLeft;
                 child->y = child->marginTop;
-                // Compute layout (now using local coordinates relative to parent)
                 computeElementLayout(child, safeW, safeH);
                 child->localX = child->x;
                 child->localY = child->y;
             }
-
-            // Convert local coords to absolute positions (this moves children along with parent)
+            // Convert local coords to absolute coordinates using parent's safe origin
             child->x = safeLeft + child->localX;
             child->y = safeTop + child->localY;
-#ifdef LAYOUT_DEBUG
-            std::cout << "[Layout] Parent(" << container->id << ") x=" << container->x << " safeLeft=" << container->getSafeContentLeft() << " child(" << child->id << ") finalAbsX=" << child->x << " finalAbsY=" << child->y << " localX=" << child->localX << " localY=" << child->localY << " manual=" << (child->manualPosition?1:0) << std::endl;
-#endif
-
-            // Recurse for nested containers
             if (Window* wchild = dynamic_cast<Window*>(child)) {
                 computeChildrenLayoutForContainer(wchild);
             } else if (Panel* pchild = dynamic_cast<Panel*>(child)) {
@@ -209,9 +184,7 @@ public:
         }
     }
 
-    // Compute layout for a single element within a container
     static void computeElementLayout(UIElement* element, float containerWidth, float containerHeight) {
-        // Compute effective width/height with Stretch first
         float effectiveWidth = element->width;
         float effectiveHeight = element->height;
 
@@ -223,11 +196,8 @@ public:
             effectiveHeight = containerHeight - element->marginTop - element->marginBottom;
         }
 
-        // Handle Auto sizing by inspecting content (textures) when available
         if (element->widthMode == SizeMode::Auto || element->heightMode == SizeMode::Auto) {
-            // Only consider texture content for Auto sizing
             std::string src;
-            // Panels and Windows store src in UIElement base
             src = element->src;
 
             if (!src.empty()) {
@@ -235,40 +205,32 @@ public:
                 int texW = sz.first;
                 int texH = sz.second;
 
-                // If both dimensions are Auto, use native texture size
                 if (element->widthMode == SizeMode::Auto && element->heightMode == SizeMode::Auto) {
                     if (texW > 0 && texH > 0) {
                         effectiveWidth = (float)texW;
                         effectiveHeight = (float)texH;
                     }
                 }
-                // If width is Auto but height is fixed/stretched, maintain aspect ratio
                 else if (element->widthMode == SizeMode::Auto && element->heightMode != SizeMode::Auto) {
                     if (texH > 0) {
                         effectiveWidth = effectiveHeight * (static_cast<float>(texW) / static_cast<float>(texH));
                     }
                 }
-                // If height is Auto but width is fixed/stretched, maintain aspect ratio
                 else if (element->heightMode == SizeMode::Auto && element->widthMode != SizeMode::Auto) {
                     if (texW > 0) {
                         effectiveHeight = effectiveWidth * (static_cast<float>(texH) / static_cast<float>(texW));
                     }
                 }
             }
-            // If no texture available, fall back to current element sizes (no change)
         }
 
-        // Update element size
         element->width = effectiveWidth;
         element->height = effectiveHeight;
 
-        // If the element was manually positioned by the user, preserve its x/y
-        // so layout passes don't override user dragging. We still computed sizes above.
         if (element->manualPosition) {
             return;
         }
 
-        // Compute horizontal position based on hDock
         switch (element->hDock) {
             case HDock::Left:
                 element->x = element->marginLeft;
@@ -283,7 +245,6 @@ public:
                 break;
         }
 
-        // Compute vertical position based on vDock
         switch (element->vDock) {
             case VDock::Top:
                 element->y = element->marginTop;

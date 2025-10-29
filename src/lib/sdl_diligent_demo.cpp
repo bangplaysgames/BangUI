@@ -1,11 +1,9 @@
 #include <SDL3/SDL.h>
 #include <iostream>
 #include <cmath>
-#include "../models/Window.h"
-#include "../models/Panel.h"
-#include "UIManager.h"
-#include "UIRenderer.h"
-#include "LayoutManager.h"
+#include "BangUI.h"
+
+using namespace BangUI;
 
 int main(int argc, char* argv[]) {
     std::cout << "=== BangUI Interactive Demo ===" << std::endl;
@@ -38,10 +36,12 @@ int main(int argc, char* argv[]) {
 
     // Create the BangUI library manager and renderer
     UIManager uiManager;
-    UIRenderer uiRenderer(sdlRenderer);
+    // Use the API-compatible renderer wrapper which implements API::IRenderer
+    BangUI::Renderer rendererImpl(sdlRenderer);
 
-    // Set application window bounds for clamping
-    uiManager.setApplicationWindow(800.0f, 600.0f, 0.0f);
+    // Provide the native SDL window to the manager so it can query size
+    // itself and remain authoritative for application bounds.
+    uiManager.setNativeWindow(reinterpret_cast<void*>(sdlWindow));
 
     std::cout << "\n=== Creating UI Elements with Docking ===" << std::endl;
 
@@ -90,7 +90,7 @@ int main(int argc, char* argv[]) {
     // Window 2 - Bottom-right with custom title bar color
     Window* window2 = new Window();
     window2->id = "window2";
-    window2->title = "Docked Bottom-Right";
+    window2->title = "Docked Bottom Child Window inside Panel1";
     window2->hDock = HDock::None;
     window2->vDock = VDock::Bottom;
     window2->widthMode = SizeMode::Absolute;
@@ -145,11 +145,9 @@ int main(int argc, char* argv[]) {
 
     Button* Button1 = new Button();
     Button1->id = "button1";
-    Button1->text = "Test Button";
+    Button1->label = "Test Button";
     Button1->parent = panel2;
-    Button1->OnClick() override {
-        std::cout << "Button clicked!" << std::endl;
-    };
+    Button1->onClick = [](){ std::cout << "Button clicked!" << std::endl; };
     panel2->content.push_back(Button1);
 
 
@@ -205,47 +203,20 @@ int main(int argc, char* argv[]) {
                 running = false;
             }
 
-            // Handle window resize events (SDL3: SDL_EVENT_WINDOW_RESIZED, SDL2: SDL_WINDOWEVENT)
-            if (e.type == SDL_EVENT_WINDOW_RESIZED) {
-                // SDL3 provides new size in event.window.data1 / data2
-                windowWidth = e.window.data1;
-                windowHeight = e.window.data2;
-                // Recompute layout immediately for the new size
-                std::vector<UIElement*> allElements;
-                for (Panel* p : uiManager.getPanels()) allElements.push_back(p);
-                for (Window* w : uiManager.getWindows()) allElements.push_back(w);
-                LayoutManager::computeLayout(windowWidth, windowHeight, allElements);
-                uiManager.setApplicationWindow(windowWidth, windowHeight, 0.0f);
-            }
+            // Window resize events are handled internally by UIManager (recomputes layout)
 
             // Let the UI manager handle all mouse/events
             uiManager.handleEvent(e);
         }
 
-        // Compute layout for all elements (respects docking)
-        std::vector<UIElement*> allElements;
-        for (Panel* p : uiManager.getPanels()) {
-            allElements.push_back(p);
-        }
-        for (Window* w : uiManager.getWindows()) {
-            allElements.push_back(w);
-        }
-        LayoutManager::computeLayout(windowWidth, windowHeight, allElements);
+    // Update manager (runs layout internally and queries the native
+    // window size when available).
+    uiManager.Update(dt);
 
-        // Rendering
+        // Rendering through the manager's Render method
         SDL_SetRenderDrawColor(sdlRenderer, 40, 40, 40, 255);
         SDL_RenderClear(sdlRenderer);
-
-        // Render all panels
-        for (const Panel* panel : uiManager.getPanels()) {
-            uiRenderer.renderPanel(panel);
-        }
-
-        // Render all windows (title bar color now from window property)
-        for (const Window* win : uiManager.getWindows()) {
-            uiRenderer.renderWindow(win);
-        }
-
+    uiManager.Render(static_cast<BangUI::API::IRenderer*>(&rendererImpl));
         SDL_RenderPresent(sdlRenderer);
         SDL_Delay(16); // ~60 FPS
     }

@@ -14,6 +14,14 @@ Goals
 - Provide a small, stable public API (headers under `src/api/`) that application developers include.
 - Separate implementation from API (implementations under `src/impl/` or `src/lib/impl/`).
 - Keep public headers minimal: no heavy includes, no concrete defaults, no non-trivial inline logic.
+
+Single-include policy
+----------------------
+The project will provide a single public convenience header `src/lib/BangUI.h` that re-exports
+the stable public API. All future public elements (types, interfaces, managers, helpers) MUST be
+added to `src/api/` and also re-exported from `src/lib/BangUI.h` so applications can include only
+one header (`#include "BangUI.h"`) to consume the library. This is the canonical consumer-facing
+contract for the library.
 - Preserve all existing capabilities and behaviour unless you explicitly request changes.
 - Improve performance: layout dirty-tree, batched renderer design, minimal per-frame allocations.
 - Make code maintainable and testable; add unit tests for pure logic modules.
@@ -31,7 +39,8 @@ High-level design
    - `src/impl/ButtonImpl.*` - concrete Button implementation
    - `src/impl/LayoutManager.*` - layout algorithm (measure/arrange)
    - `src/impl/UIManager.*` - input dispatch, event routing, focus, modal handling
-   - `src/impl/Renderer/DiligentRenderer.*` - renderer implementation using Diligent
+      - `src/impl/Renderer/DiligentRenderer.*` - renderer implementation using Diligent (future)
+      - `src/impl/RendererImpl.h/.cpp` - temporary SDL-based impl wrapper used during migration
    - `src/impl/BML/*` - parser and stylesheet system
 
 3. Demo and examples
