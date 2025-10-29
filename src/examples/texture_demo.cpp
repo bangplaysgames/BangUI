@@ -1,10 +1,6 @@
 #include <SDL3/SDL.h>
 #include <iostream>
-#include "../models/Window.h"
-#include "../models/Panel.h"
-#include "../lib/UIManager.h"
-#include "../lib/UIRenderer.h"
-#include "../lib/LayoutManager.h"
+#include "../lib/BangUI.h"
 
 int main(int argc, char* argv[]) {
     std::cout << "=== BangUI Texture Demo ===" << std::endl;

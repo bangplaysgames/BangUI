@@ -17,7 +17,7 @@ Thumbs.db
 *.tmp
 *.swp
 .vscode/
-DiligentEngine/
+DiligentEngine/*
 .claude/
 .github/
 .specify/
@@ -25,6 +25,7 @@ DiligentEngine/
 BangUI_Documentation.md
 BMLSyntax.md
 Operational Paradigm.md
+OVERHAUL_PLAN.md
 Overview.md
 Paradigm.md
 specs/
@@ -45,3 +46,5 @@ Makefile
 
 # SDL image cache
 *.cache
+
+DiligentEngine/
