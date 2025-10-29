@@ -1,0 +1,47 @@
+# C++/SDL3/Diligent Engine
+build/
+bin/
+obj/
+out/
+*.o
+*.so
+*.a
+*.exe
+*.dll
+.idea/
+*.log
+.env*
+# Universal
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+DiligentEngine/
+.claude/
+.github/
+.specify/
+.vcpkg/
+BangUI_Documentation.md
+BMLSyntax.md
+Operational Paradigm.md
+Overview.md
+Paradigm.md
+specs/
+
+# CMake / build artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Compiler outputs
+*.obj
+*.lib
+
+# IDE specific
+*.sln
+*.vcxproj*
+
+# SDL image cache
+*.cache
