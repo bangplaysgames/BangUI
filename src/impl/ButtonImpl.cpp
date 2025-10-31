@@ -11,7 +11,7 @@ void ButtonImpl::OnClickImpl()
     if (onClick)
     {
         try {
-            onClick();
+            onClick(this);
         } catch (...) {
             // Swallow exceptions to avoid bringing down the UI loop
         }

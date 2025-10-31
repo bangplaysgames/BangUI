@@ -8,6 +8,8 @@
 #include "../impl/PanelImpl.h"
 #include "../impl/LayoutManager.h"
 #include "../impl/ButtonImpl.h"
+#include "../impl/BML/BMLParser.h"
+#include "../impl/BML/GlobalDefaults.h"
 
 namespace BangUI::impl {
 
@@ -23,6 +25,16 @@ public:
     float resizeStartY = 0.0f;
     float resizeStartWidth = 0.0f;
     float resizeStartHeight = 0.0f;
+
+    // Scrollbar dragging state
+    bool isScrollbarDragging = false;
+    // which element is being scrolled by drag (could be PanelImpl or WindowImpl)
+    UIElement* scrollbarDragTarget = nullptr;
+    // axis: 'x' or 'y'
+    char scrollbarDragAxis = '\0';
+    // drag start positions
+    float scrollbarDragStartMouse = 0.0f;
+    float scrollbarDragStartScroll = 0.0f;
 
     float appWindowWidth = 800.0f;
     float appWindowHeight = 600.0f;
@@ -42,8 +54,20 @@ public:
     float getAppWindowHeight() const override { return appWindowHeight; }
     float getAppWindowPadding() const override { return appWindowPadding; }
 
-    void addPanel(impl::PanelImpl* panel) { panels.push_back(panel); }
-    void addWindow(impl::WindowImpl* window) { windows.push_back(window); }
+    void addPanel(impl::PanelImpl* panel) {
+        panels.push_back(panel);
+        // apply Global_<Type> styles from BML if available
+    auto& parser = BangUI::impl::BMLParser::getGlobalParser();
+        parser.applyGlobalStyleToElement(panel->type, panel);
+        // apply programmatic global defaults
+        BangUI::impl::GlobalDefaults::applyToElement(panel);
+    }
+    void addWindow(impl::WindowImpl* window) {
+        windows.push_back(window);
+    auto& parser = BangUI::impl::BMLParser::getGlobalParser();
+        parser.applyGlobalStyleToElement(window->type, window);
+        BangUI::impl::GlobalDefaults::applyToElement(window);
+    }
 
     bool removePanel(impl::PanelImpl* panel) {
         auto it = std::find(panels.begin(), panels.end(), panel);
@@ -68,6 +92,8 @@ public:
     // API-compatible methods (implemented in the .cpp)
     void Update(float dt) override;
     void Render(API::IRenderer* renderer) override;
+    // Active renderer used to query measurements during input handling
+    API::IRenderer* activeRenderer = nullptr;
     // Backwards-compatible event handler expected by demo. Implementation in .cpp
     void handleEvent(const SDL_Event& e);
 

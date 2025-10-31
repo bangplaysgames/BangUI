@@ -79,6 +79,118 @@ void UIManagerImpl::handleEventSDLImpl(const SDL_Event& e) {
     else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) {
         handleMouseUp();
     }
+
+    // Mouse wheel handling (SDL3 uses SDL_EVENT_MOUSE_WHEEL)
+    if (e.type == SDL_EVENT_MOUSE_WHEEL) {
+        float mx, my;
+        SDL_GetMouseState(&mx, &my);
+        float wheelY = static_cast<float>(e.wheel.y); // positive away from user (scroll up)
+        float wheelX = static_cast<float>(e.wheel.x);
+    // Use modifier state API which is reliable across platforms
+    bool shift = (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
+
+        // Prefer windows then panels; find topmost scrollable under cursor
+        for (auto it = windows.rbegin(); it != windows.rend(); ++it) {
+            impl::WindowImpl* w = *it;
+            if (!w->visible) continue;
+            if (mx >= w->getSafeContentLeft() && mx <= w->getSafeContentRight() && my >= w->getSafeContentTop() && my <= w->getSafeContentBottom()) {
+                if (!w->scrollable.empty()) {
+                    // compute previous values to detect actual change per-axis
+                    float prevX = w->scrollX;
+                    float prevY = w->scrollY;
+                    if (shift) {
+                        // horizontal via shift+wheel: prefer native horizontal wheel (wheelX) if present
+                        float delta = (fabsf(wheelX) > 0.0f) ? wheelX : wheelY;
+                        if (w->scrollable == "horizontal" || w->scrollable == "both") {
+                            w->scrollX -= delta * 20.0f;
+                        }
+                    } else {
+                        if (w->scrollable == "vertical" || w->scrollable == "both") {
+                            w->scrollY -= wheelY * 20.0f;
+                        }
+                    }
+                    // Compute content extents and clamp to valid range immediately so renderer sees consistent state
+                    {
+                        float contentW = 0.0f; float contentH = 0.0f;
+                        for (UIElement* c : w->content) {
+                            if (!c) continue;
+                            float mW = c->width, mH = c->height;
+                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, w->getSafeContentRight() - w->getSafeContentLeft(), w->getSafeContentBottom() - w->getSafeContentTop(), mW, mH);
+                            // fallback: use stored width/height
+                            contentW = std::max(contentW, c->x + mW);
+                            contentH = std::max(contentH, c->y + mH);
+                        }
+                        float viewportW = w->getSafeContentRight() - w->getSafeContentLeft();
+                        float viewportH = w->getSafeContentBottom() - w->getSafeContentTop();
+                        float maxScrollX = std::max(0.0f, contentW - viewportW);
+                        float maxScrollY = std::max(0.0f, contentH - viewportH);
+                        float clampedX = std::max(0.0f, std::min(w->scrollX, maxScrollX));
+                        float clampedY = std::max(0.0f, std::min(w->scrollY, maxScrollY));
+                        if (clampedX != w->scrollX) {
+                            std::cerr << "[DIAG][UIManager] clamp window id=" << w->id << " axis=X contentW=" << contentW << " viewportW=" << viewportW << " maxScrollX=" << maxScrollX << " prev=" << w->scrollX << " new=" << clampedX << std::endl;
+                            w->scrollX = clampedX;
+                        }
+                        if (clampedY != w->scrollY) {
+                            std::cerr << "[DIAG][UIManager] clamp window id=" << w->id << " axis=Y contentH=" << contentH << " viewportH=" << viewportH << " maxScrollY=" << maxScrollY << " prev=" << w->scrollY << " new=" << clampedY << std::endl;
+                            w->scrollY = clampedY;
+                        }
+                        if (w->scrollX != prevX) w->scrollBarFadeTimerX = w->scrollBarFadeDuration;
+                        if (w->scrollY != prevY) w->scrollBarFadeTimerY = w->scrollBarFadeDuration;
+                    }
+                    return;
+                }
+            }
+        }
+
+        for (auto it = panels.rbegin(); it != panels.rend(); ++it) {
+            impl::PanelImpl* p = *it;
+            if (!p->visible) continue;
+            if (mx >= p->getSafeContentLeft() && mx <= p->getSafeContentRight() && my >= p->getSafeContentTop() && my <= p->getSafeContentBottom()) {
+                if (!p->scrollable.empty()) {
+                    float prevX = p->scrollX;
+                    float prevY = p->scrollY;
+                    if (shift) {
+                        float delta = (fabsf(wheelX) > 0.0f) ? wheelX : wheelY;
+                        if (p->scrollable == "horizontal" || p->scrollable == "both") {
+                            p->scrollX -= delta * 20.0f;
+                        }
+                    } else {
+                        if (p->scrollable == "vertical" || p->scrollable == "both") {
+                            p->scrollY -= wheelY * 20.0f;
+                        }
+                    }
+                    // Compute content extents and clamp immediately
+                    {
+                        float contentW = 0.0f; float contentH = 0.0f;
+                        for (UIElement* c : p->content) {
+                            if (!c) continue;
+                            float mW = c->width, mH = c->height;
+                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, p->getSafeContentRight() - p->getSafeContentLeft(), p->getSafeContentBottom() - p->getSafeContentTop(), mW, mH);
+                            contentW = std::max(contentW, c->x + mW);
+                            contentH = std::max(contentH, c->y + mH);
+                        }
+                        float viewportW = p->getSafeContentRight() - p->getSafeContentLeft();
+                        float viewportH = p->getSafeContentBottom() - p->getSafeContentTop();
+                        float maxScrollX = std::max(0.0f, contentW - viewportW);
+                        float maxScrollY = std::max(0.0f, contentH - viewportH);
+                        float clampedX = std::max(0.0f, std::min(p->scrollX, maxScrollX));
+                        float clampedY = std::max(0.0f, std::min(p->scrollY, maxScrollY));
+                        if (clampedX != p->scrollX) {
+                            std::cerr << "[DIAG][UIManager] clamp panel id=" << p->id << " axis=X contentW=" << contentW << " viewportW=" << viewportW << " maxScrollX=" << maxScrollX << " prev=" << p->scrollX << " new=" << clampedX << std::endl;
+                            p->scrollX = clampedX;
+                        }
+                        if (clampedY != p->scrollY) {
+                            std::cerr << "[DIAG][UIManager] clamp panel id=" << p->id << " axis=Y contentH=" << contentH << " viewportH=" << viewportH << " maxScrollY=" << maxScrollY << " prev=" << p->scrollY << " new=" << clampedY << std::endl;
+                            p->scrollY = clampedY;
+                        }
+                        if (p->scrollX != prevX) p->scrollBarFadeTimerX = p->scrollBarFadeDuration;
+                        if (p->scrollY != prevY) p->scrollBarFadeTimerY = p->scrollBarFadeDuration;
+                    }
+                    return;
+                }
+            }
+        }
+    }
     else if (e.type == SDL_EVENT_MOUSE_MOTION) {
         handleMouseMove(e.motion.x, e.motion.y);
         if (isMouseDown) {
@@ -146,11 +258,7 @@ bool UIManagerImpl::checkElementHitRecursive(UIElement* element, float mouseX, f
     if (!element || !element->visible || !element->interactable) return false;
 
     if (impl::WindowImpl* w = dynamic_cast<impl::WindowImpl*>(element)) {
-        for (auto it = w->content.rbegin(); it != w->content.rend(); ++it) {
-            API::UIElement* child = *it;
-            if (checkElementHitRecursive(child, mouseX, mouseY)) return true;
-        }
-
+        // Give window chrome (close button, resize handle, title bar) priority over children
         if (w->closeable && w->isPointInCloseButton(mouseX, mouseY)) {
             if (w->parent) {
                 API::UIElement* parent = w->parent;
@@ -168,7 +276,6 @@ bool UIManagerImpl::checkElementHitRecursive(UIElement* element, float mouseX, f
             delete w;
             return true;
         }
-
         if (w->resizable && w->isPointInResizeHandle(mouseX, mouseY)) {
             resizingWindow = w;
             resizeStartX = mouseX;
@@ -202,6 +309,20 @@ bool UIManagerImpl::checkElementHitRecursive(UIElement* element, float mouseX, f
             return true;
         }
 
+        // Otherwise, check children (reverse order so topmost children hit first)
+        for (auto it = w->content.rbegin(); it != w->content.rend(); ++it) {
+            API::UIElement* child = *it;
+            if (checkElementHitRecursive(child, mouseX, mouseY)) return true;
+        }
+
+        // If we reached here, no child or chrome handled the click.
+        // If the window is interactable and the point lies inside its bounds,
+        // swallow the click so it doesn't pass through to elements underneath.
+        if (w->interactable && w->visible &&
+            mouseX >= w->x && mouseX <= w->x + w->width &&
+            mouseY >= w->y && mouseY <= w->y + w->height) {
+            return true;
+        }
         return false;
     }
 
@@ -229,14 +350,41 @@ bool UIManagerImpl::checkElementHitRecursive(UIElement* element, float mouseX, f
             return true;
         }
 
+        // If we reached here, no child handled the click. If the panel is
+        // interactable and the point is inside the panel bounds, swallow the
+        // click to prevent it passing through to underlying elements.
+        if (p->interactable && p->visible &&
+            mouseX >= p->x && mouseX <= p->x + p->width &&
+            mouseY >= p->y && mouseY <= p->y + p->height) {
+            return true;
+        }
         return false;
     }
 
     if (ButtonImpl* b = dynamic_cast<ButtonImpl*>(element)) {
-        if (b->onClick) b->onClick();
+        // Only trigger button click when the pointer is inside the button bounds
+        if (b->visible && b->interactable &&
+            mouseX >= b->x && mouseX <= b->x + b->width &&
+            mouseY >= b->y && mouseY <= b->y + b->height) {
+            // Use the concrete click implementation so pressed-state is handled
+            b->OnClickImpl();
+            return true;
+        }
+        return false;
+    }
+
+    // Generic element click: if the point is inside the element bounds and
+    // the element is interactable, consume the click. If it also has an
+    // onClick handler, invoke it. If the element is not interactable, allow
+    // the click to pass through to underlying elements.
+    if (element->visible && element->interactable &&
+        mouseX >= element->x && mouseX <= element->x + element->width &&
+        mouseY >= element->y && mouseY <= element->y + element->height) {
+        if (element->onClick) {
+            element->onClick(element);
+        }
         return true;
     }
-    if (element->onClick) { element->onClick(); return true; }
 
     return false;
 }
@@ -249,18 +397,89 @@ void UIManagerImpl::handleMouseDown(float mouseX, float mouseY) {
     // Check modal window first
     impl::WindowImpl* modal = getModalWindow();
     if (modal) {
+        // If a modal window is active, only process clicks that hit the modal.
+        // Clicks outside the modal should not interact with background elements.
+        // If click is on scrollbar thumb of modal, start dragging
+        // (fall through to checkElementHitRecursive for usual handling)
         if (checkElementHitRecursive(modal, mouseX, mouseY)) return;
+        // Click was outside the modal: swallow the click (do nothing)
+        return;
     } else {
         // Iterate windows top-down
+        // First, check for scrollbar thumb clicks on windows (topmost first)
         for (auto it = windows.rbegin(); it != windows.rend(); ++it) {
             impl::WindowImpl* w = *it;
             if (!w->visible) continue;
+            float safeLeft = w->getSafeContentLeft();
+            float safeTop = w->getSafeContentTop();
+            float safeW = w->getSafeContentRight() - w->getSafeContentLeft();
+            float safeH = w->getSafeContentBottom() - w->getSafeContentTop();
+            // vertical
+                if (w->scrollable == "vertical" || w->scrollable == "both") {
+                float sbw = 8.0f; float sbx = safeLeft + safeW - sbw - 4.0f; float sby = safeTop + 4.0f; float sbh = safeH - 8.0f;
+                // content height
+                float contentH = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
+                float viewportH = safeH;
+                if (contentH > viewportH + 1.0f) {
+                    // Thumb height should be proportional to viewport/content but scaled to the track height (sbh)
+                    float thumbH = std::max(16.0f, sbh * (viewportH / contentH));
+                    float maxScroll = std::max(0.0f, contentH - viewportH);
+                    float thumbRelY = (maxScroll > 0.0f ? (w->scrollY / maxScroll) * (sbh - thumbH) : 0.0f);
+                    // Only start drag if mouse is over the visible thumb area (not anywhere in the track)
+                    if (mouseX >= sbx && mouseX <= sbx + sbw && mouseY >= sby + thumbRelY && mouseY <= sby + thumbRelY + thumbH) {
+                    // start vertical scrollbar drag
+                    isScrollbarDragging = true; scrollbarDragTarget = w; scrollbarDragAxis = 'y'; scrollbarDragStartMouse = mouseY; scrollbarDragStartScroll = w->scrollY; return;
+                    }
+                }
+            }
+            // horizontal
+                if (w->scrollable == "horizontal" || w->scrollable == "both") {
+                float sbh = 8.0f; float sbx = safeLeft + 4.0f; float sby = safeTop + safeH - sbh - 4.0f; float sbw = safeW - 8.0f;
+                float contentW = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
+                float viewportW = safeW;
+                // Thumb width should be proportional to viewport/content but scaled to the track width (sbw)
+                float thumbW = std::max(16.0f, sbw * (viewportW / contentW));
+                float maxScroll = std::max(0.0f, contentW - viewportW);
+                float thumbRelX = (maxScroll > 0.0f ? (w->scrollX / maxScroll) * (sbw - thumbW) : 0.0f);
+                if (mouseX >= sbx + thumbRelX && mouseX <= sbx + thumbRelX + thumbW && mouseY >= sby && mouseY <= sby + sbh) {
+                    isScrollbarDragging = true; scrollbarDragTarget = w; scrollbarDragAxis = 'x'; scrollbarDragStartMouse = mouseX; scrollbarDragStartScroll = w->scrollX; return;
+                }
+            }
+            // otherwise fall back to usual hit-testing
             if (checkElementHitRecursive(w, mouseX, mouseY)) return;
         }
         // Then panels
         for (auto it = panels.rbegin(); it != panels.rend(); ++it) {
             impl::PanelImpl* p = *it;
             if (!p->visible) continue;
+            float safeLeft = p->getSafeContentLeft();
+            float safeTop = p->getSafeContentTop();
+            float safeW = p->getSafeContentRight() - p->getSafeContentLeft();
+            float safeH = p->getSafeContentBottom() - p->getSafeContentTop();
+                if (p->scrollable == "vertical" || p->scrollable == "both") {
+                float sbw = 8.0f; float sbx = safeLeft + safeW - sbw - 4.0f; float sby = safeTop + 4.0f; float sbh = safeH - 8.0f;
+                float contentH = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
+                float viewportH = safeH;
+                // Thumb height proportional to track (sbh) times viewport/content ratio
+                float thumbH = std::max(16.0f, sbh * (viewportH / contentH));
+                float maxScroll = std::max(0.0f, contentH - viewportH);
+                float thumbRelY = (maxScroll > 0.0f ? (p->scrollY / maxScroll) * (sbh - thumbH) : 0.0f);
+                if (mouseX >= sbx && mouseX <= sbx + sbw && mouseY >= sby + thumbRelY && mouseY <= sby + thumbRelY + thumbH) {
+                    isScrollbarDragging = true; scrollbarDragTarget = p; scrollbarDragAxis = 'y'; scrollbarDragStartMouse = mouseY; scrollbarDragStartScroll = p->scrollY; return;
+                }
+            }
+            if (p->scrollable == "horizontal" || p->scrollable == "both") {
+                float sbh = 8.0f; float sbx = safeLeft + 4.0f; float sby = safeTop + safeH - sbh - 4.0f; float sbw = safeW - 8.0f;
+                float contentW = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
+                float viewportW = safeW;
+                // Thumb width proportional to track (sbw) times viewport/content ratio
+                float thumbW = std::max(16.0f, sbw * (viewportW / contentW));
+                float maxScroll = std::max(0.0f, contentW - viewportW);
+                float thumbRelX = (maxScroll > 0.0f ? (p->scrollX / maxScroll) * (sbw - thumbW) : 0.0f);
+                if (mouseX >= sbx + thumbRelX && mouseX <= sbx + thumbRelX + thumbW && mouseY >= sby && mouseY <= sby + sbh) {
+                    isScrollbarDragging = true; scrollbarDragTarget = p; scrollbarDragAxis = 'x'; scrollbarDragStartMouse = mouseX; scrollbarDragStartScroll = p->scrollX; return;
+                }
+            }
             if (checkElementHitRecursive(p, mouseX, mouseY)) return;
         }
     }
@@ -276,19 +495,126 @@ void UIManagerImpl::handleMouseUp() {
 }
 
 void UIManagerImpl::handleMouseMove(float mouseX, float mouseY) {
+    // If we're currently dragging a scrollbar thumb, update scroll offsets
+    if (isMouseDown && isScrollbarDragging && scrollbarDragTarget) {
+        // Try window
+    if (impl::WindowImpl* w = dynamic_cast<impl::WindowImpl*>(scrollbarDragTarget)) {
+        // compute safe content rect once for window
+        float safeLeft = w->getSafeContentLeft();
+        float safeTop = w->getSafeContentTop();
+        float safeW = w->getSafeContentRight() - w->getSafeContentLeft();
+        float safeH = w->getSafeContentBottom() - w->getSafeContentTop();
+        if (scrollbarDragAxis == 'y') {
+        float sby = safeTop + 4.0f; float sbh = safeH - 8.0f; // track area
+                float contentH = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
+                float viewportH = safeH;
+                // compute thumb height relative to the scrollbar track (sbh)
+                float thumbH = std::max(16.0f, (contentH > 0.0f) ? sbh * (viewportH / contentH) : sbh);
+                float usable = sbh - thumbH;
+                float mouseDelta = mouseY - scrollbarDragStartMouse;
+                float scrollRange = std::max(0.0f, contentH - viewportH);
+                if (usable > 0.0f && scrollRange > 0.0f) {
+                    float scrollDelta = (mouseDelta / usable) * scrollRange;
+                    float newScroll = scrollbarDragStartScroll + scrollDelta;
+                    float clamped = std::max(0.0f, std::min(newScroll, scrollRange));
+                    if (clamped != newScroll) {
+                        std::cerr << "[DIAG][UIManager] drag-clamp window id=" << w->id << " axis=Y contentH=" << contentH << " viewportH=" << viewportH << " scrollRange=" << scrollRange << " pre=" << newScroll << " clamped=" << clamped << std::endl;
+                    }
+                    w->scrollY = clamped;
+                    w->scrollBarFadeTimerY = w->scrollBarFadeDuration;
+                }
+                return;
+            }
+            if (scrollbarDragAxis == 'x') {
+                float sbx = safeLeft + 4.0f; float sbw = safeW - 8.0f;
+                float contentW = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
+                float viewportW = safeW;
+                // compute thumb width relative to the scrollbar track (sbw)
+                float thumbW = std::max(16.0f, (contentW > 0.0f) ? sbw * (viewportW / contentW) : sbw);
+                float usable = sbw - thumbW;
+                float mouseDelta = mouseX - scrollbarDragStartMouse;
+                float scrollRange = std::max(0.0f, contentW - viewportW);
+                if (usable > 0.0f && scrollRange > 0.0f) {
+                    float scrollDelta = (mouseDelta / usable) * scrollRange;
+                    w->scrollX = scrollbarDragStartScroll + scrollDelta;
+                    w->scrollX = std::max(0.0f, std::min(w->scrollX, scrollRange));
+                    w->scrollBarFadeTimerX = w->scrollBarFadeDuration;
+                }
+                return;
+            }
+        }
+        // Try panel
+    if (impl::PanelImpl* p = dynamic_cast<impl::PanelImpl*>(scrollbarDragTarget)) {
+        // compute safe content rect once for panel
+        float safeLeft = p->getSafeContentLeft();
+        float safeTop = p->getSafeContentTop();
+        float safeW = p->getSafeContentRight() - p->getSafeContentLeft();
+        float safeH = p->getSafeContentBottom() - p->getSafeContentTop();
+        if (scrollbarDragAxis == 'y') {
+        float sby = safeTop + 4.0f; float sbh = safeH - 8.0f; // track area
+                float contentH = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
+                float viewportH = safeH;
+                float thumbH = std::max(16.0f, (contentH > 0.0f) ? sbh * (viewportH / contentH) : sbh);
+                float usable = sbh - thumbH;
+                float mouseDelta = mouseY - scrollbarDragStartMouse;
+                float scrollRange = std::max(0.0f, contentH - viewportH);
+                if (usable > 0.0f && scrollRange > 0.0f) {
+                    float scrollDelta = (mouseDelta / usable) * scrollRange;
+                    p->scrollY = scrollbarDragStartScroll + scrollDelta;
+                    p->scrollY = std::max(0.0f, std::min(p->scrollY, scrollRange));
+                    p->scrollBarFadeTimerY = p->scrollBarFadeDuration;
+                }
+                return;
+            }
+            if (scrollbarDragAxis == 'x') {
+                float sbx = safeLeft + 4.0f; float sbw = safeW - 8.0f;
+                float contentW = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
+                float viewportW = safeW;
+                float thumbW = std::max(16.0f, (contentW > 0.0f) ? sbw * (viewportW / contentW) : sbw);
+                float usable = sbw - thumbW;
+                float mouseDelta = mouseX - scrollbarDragStartMouse;
+                float scrollRange = std::max(0.0f, contentW - viewportW);
+                if (usable > 0.0f && scrollRange > 0.0f) {
+                    float scrollDelta = (mouseDelta / usable) * scrollRange;
+                    p->scrollX = scrollbarDragStartScroll + scrollDelta;
+                    p->scrollX = std::max(0.0f, std::min(p->scrollX, scrollRange));
+                    p->scrollBarFadeTimerX = p->scrollBarFadeDuration;
+                }
+                return;
+            }
+        }
+    }
+
     // Update hover states (simple approach)
     for (auto p : panels) {
         for (auto child : p->content) {
             if (!child) continue;
+            // Ensure programmatic global defaults are applied for elements
+            // that were added to a panel after the panel was registered with the manager.
+            BangUI::impl::GlobalDefaults::applyToElement(child);
             bool nowHovered = (mouseX >= child->x && mouseX <= child->x + child->width && mouseY >= child->y && mouseY <= child->y + child->height);
+            bool prevHovered = child->isHovered;
             child->isHovered = nowHovered;
+            if (nowHovered && !prevHovered) {
+                if (child->onHover) child->onHover(child);
+            } else if (!nowHovered && prevHovered) {
+                if (child->onBlur) child->onBlur(child);
+            }
         }
     }
     for (auto w : windows) {
         for (auto child : w->content) {
             if (!child) continue;
+            // Apply programmatic global defaults lazily for children added after window registration.
+            BangUI::impl::GlobalDefaults::applyToElement(child);
             bool nowHovered = (mouseX >= child->x && mouseX <= child->x + child->width && mouseY >= child->y && mouseY <= child->y + child->height);
+            bool prevHovered = child->isHovered;
             child->isHovered = nowHovered;
+            if (nowHovered && !prevHovered) {
+                if (child->onHover) child->onHover(child);
+            } else if (!nowHovered && prevHovered) {
+                if (child->onBlur) child->onBlur(child);
+            }
         }
     }
 }
@@ -436,17 +762,59 @@ void UIManagerImpl::Update(float dt) {
 
     // (Removed diagnostic logging)
 
+    // Ensure programmatic global defaults are applied to every element (and their children)
+    // before computing layout so prototypes act as true defaults on first render.
+    std::function<void(API::UIElement*)> applyRecursively = [&](API::UIElement* el) {
+        if (!el) return;
+        BangUI::impl::GlobalDefaults::applyToElement(el);
+        // If the element is a panel or window, apply recursively to its content
+        if (impl::PanelImpl* p = dynamic_cast<impl::PanelImpl*>(el)) {
+            for (auto child : p->content) applyRecursively(child);
+        } else if (impl::WindowImpl* w = dynamic_cast<impl::WindowImpl*>(el)) {
+            for (auto child : w->content) applyRecursively(child);
+        }
+    };
+
     std::vector<UIElement*> allElements;
-    for (impl::PanelImpl* p : panels) allElements.push_back(p);
-    for (impl::WindowImpl* w : windows) allElements.push_back(w);
+    for (impl::PanelImpl* p : panels) {
+        applyRecursively(p);
+        allElements.push_back(p);
+    }
+    for (impl::WindowImpl* w : windows) {
+        applyRecursively(w);
+        allElements.push_back(w);
+    }
     LayoutManager::computeLayout(appWindowWidth, appWindowHeight, allElements);
+
+    // Debug: print positions of panelB_nowrap children to diagnose stacking issues
+    for (impl::PanelImpl* p : panels) {
+        if (p->id == "panelB_nowrap") {
+            std::cerr << "[DEBUG] panelB_nowrap children positions:" << std::endl;
+            for (UIElement* c : p->content) {
+                if (!c) continue;
+                std::cerr << "  child id='" << c->id << "' x=" << c->x << " y=" << c->y << " localX=" << c->localX << " localY=" << c->localY << "\n";
+            }
+        }
+    }
+
+    // Update scrollbar fade timers (decrease) per-axis
+    for (impl::PanelImpl* p : panels) {
+        if (p->scrollBarFadeTimerX > 0.0f) p->scrollBarFadeTimerX = std::max(0.0f, p->scrollBarFadeTimerX - dt);
+        if (p->scrollBarFadeTimerY > 0.0f) p->scrollBarFadeTimerY = std::max(0.0f, p->scrollBarFadeTimerY - dt);
+    }
+    for (impl::WindowImpl* w : windows) {
+        if (w->scrollBarFadeTimerX > 0.0f) w->scrollBarFadeTimerX = std::max(0.0f, w->scrollBarFadeTimerX - dt);
+        if (w->scrollBarFadeTimerY > 0.0f) w->scrollBarFadeTimerY = std::max(0.0f, w->scrollBarFadeTimerY - dt);
+    }
 }
 
 void UIManagerImpl::Render(API::IRenderer* renderer) {
     if (!renderer) return;
-    // (Removed diagnostic logging)
+    // Expose the active renderer so input handling can query measurements
+    this->activeRenderer = renderer;
     for (impl::PanelImpl* p : panels) renderer->renderPanel(reinterpret_cast<const API::IPanel*>(p));
     for (impl::WindowImpl* w : windows) renderer->renderWindow(reinterpret_cast<const API::IWindow*>(w));
+    this->activeRenderer = nullptr;
 }
 
 // Define destructor out-of-line to ensure the vtable is emitted in this TU.

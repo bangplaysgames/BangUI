@@ -37,4 +37,11 @@ namespace BangUI {
 	using Window = impl::WindowImpl;
 	using Panel = impl::PanelImpl;
 	using Button = impl::ButtonImpl;
+	using Label = impl::LabelImpl;
+	// (programmatic globals are available as unqualified names below)
 }
+
+// Unqualified convenience aliases so consumer code can write `Global_Button` directly.
+inline BangUI::impl::ButtonImpl*& Global_Button = BangUI::impl::GlobalDefaults::Global_Button;
+inline BangUI::impl::PanelImpl*& Global_Panel = BangUI::impl::GlobalDefaults::Global_Panel;
+inline BangUI::impl::WindowImpl*& Global_Window = BangUI::impl::GlobalDefaults::Global_Window;

@@ -53,6 +53,8 @@ public:
 
     // Visual
     Color backgroundColor = Color{255,255,255,255};
+    // Default text color for elements that render text. Use white by default.
+    Color textColor = Color{255,255,255,255};
     std::string src;
     float borderWidth = 0.0f;
     Color borderColor = Color{0,0,0,255};
@@ -71,10 +73,10 @@ public:
 
     TooltipConfig* tooltip = nullptr;
 
-    std::function<void()> onClick = nullptr;
-    std::function<void()> onHover = nullptr;
-    std::function<void()> onFocus = nullptr;
-    std::function<void()> onBlur = nullptr;
+    std::function<void(UIElement*)> onClick = nullptr;
+    std::function<void(UIElement*)> onHover = nullptr;
+    std::function<void(UIElement*)> onFocus = nullptr;
+    std::function<void(UIElement*)> onBlur = nullptr;
 
     // Hierarchy
     UIElement* parent = nullptr;
@@ -119,11 +121,7 @@ public:
     float getSafeContentBottom() const { return y + height - contentBottom - paddingBottom; }
 };
 
-} // namespace BangUI::API
-
-// Backwards-compatibility aliases in the BangUI namespace so existing
-// implementation headers (which live in BangUI::impl) can refer to
-// UIElement, Color, and the enums without fully qualifying API::.
+}
 namespace BangUI {
     using API::Color;
     using API::SizeMode;
@@ -133,10 +131,6 @@ namespace BangUI {
     using API::UIElement;
 }
 
-// Compatibility: also make some API symbols available at global scope for
-// existing implementation headers that expect unqualified names like
-// `UIElement` or `Color`. This is a minimal shim and does not create new
-// type definitions (it's a using-declaration only).
 using BangUI::API::UIElement;
 using BangUI::API::Color;
 using BangUI::API::SizeMode;
