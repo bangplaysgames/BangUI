@@ -438,24 +438,12 @@ public:
                                         (childRect.x) >= (safeAreaF.x + safeAreaF.w - EPS) ||
                                         (childRect.y + childRect.h) <= (safeAreaF.y + EPS) ||
                                         (childRect.y) >= (safeAreaF.y + safeAreaF.h - EPS));
-                    // Diagnostic logging for specific demo panels
-                    if (panel->id == "panelB_nowrap" || panel->id == "winD_scroll_both") {
-                        std::cerr << "[DIAG][panel] id=" << panel->id
-                                  << " scrollX=" << panel->scrollX << " scrollY=" << panel->scrollY
-                                  << " safeArea=(" << safeAreaF.x << "," << safeAreaF.y << "," << safeAreaF.w << "," << safeAreaF.h << ")"
-                                  << " child=(x=" << child->x << ",y=" << child->y << ",w=" << measuredW << ",h=" << measuredH << ")"
-                                  << " childRect=(x=" << childRect.x << ",y=" << childRect.y << ",w=" << childRect.w << ",h=" << childRect.h << ")"
-                                  << " intersects=" << intersects << std::endl;
-                    }
                     if (intersects) {
                         // Temporarily translate renderer by negative scroll to draw children in scrolled coordinates
                         float prevX = child->x;
                         float prevY = child->y;
                         float transX = prevX - panel->scrollX;
                         float transY = prevY - panel->scrollY;
-                        if (panel->id == "panelB_nowrap" || panel->id == "winD_scroll_both") {
-                            std::cerr << "[DIAG][panel] will render child at translated=(" << transX << "," << transY << ") prev=(" << prevX << "," << prevY << ")" << std::endl;
-                        }
                         child->x = transX;
                         child->y = transY;
                         renderElement(child);
