@@ -1,5 +1,6 @@
 #pragma once
 #include "../api/UIElement.h"
+#include "DockPolicy.h"
 #include "../models/Mesh.h"
 #include <string>
 #include <vector>
@@ -8,16 +9,28 @@ namespace BangUI::impl {
 
 class WindowImpl : public BangUI::API::UIElement {
 public:
+    WindowImpl() { type = "Window"; }
     std::string title;
     bool resizable = false;
     bool movable = true;
     bool modal = false;
     bool closeable = false;
+    // Docking policy for this container. Default uses reserved strips to avoid overlap.
+    BangUI::impl::DockPolicy dockPolicy = BangUI::impl::DockPolicy::ReserveStrips;
     std::vector<UIElement*> content;
     std::string renderSpace = "orthographic"; // "orthographic" or "diegetic"
     Mesh* anchorMesh = nullptr; // only if diegetic
     std::string anchorBone; // only if diegetic
     std::string scrollable; // "vertical", "horizontal", "both"
+
+    // Content scroll offsets (pixels). Positive scrollY means content moved up (user scrolled down).
+    float scrollX = 0.0f;
+    float scrollY = 0.0f;
+
+    // Scrollbar fade state (per-axis timer)
+    float scrollBarFadeTimerX = 0.0f; // seconds remaining to show horizontal scrollbar
+    float scrollBarFadeTimerY = 0.0f; // seconds remaining to show vertical scrollbar
+    const float scrollBarFadeDuration = 0.8f; // duration to remain visible after activity
 
     Color titleBarColor = Color(80,80,120,255);
     std::string closeSrc;
@@ -49,8 +62,10 @@ public:
     }
 
     // Safe content area helpers
+    // Title bar is excluded from the safe content top; border is drawn outside
+    // the element bounds so it should not reduce the safe content area.
     float getSafeContentLeft() const { return x + contentLeft + paddingLeft; }
-    float getSafeContentTop() const { return y + contentTop + paddingTop; }
+    float getSafeContentTop() const { return y + TITLE_BAR_HEIGHT + contentTop + paddingTop; }
     float getSafeContentRight() const { return x + width - contentRight - paddingRight; }
     float getSafeContentBottom() const { return y + height - contentBottom - paddingBottom; }
 

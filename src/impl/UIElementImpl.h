@@ -70,10 +70,10 @@ public:
 
     TooltipConfig* tooltip = nullptr;
 
-    std::function<void()> onClick = nullptr;
-    std::function<void()> onHover = nullptr;
-    std::function<void()> onFocus = nullptr;
-    std::function<void()> onBlur = nullptr;
+    std::function<void(UIElement*)> onClick = nullptr;
+    std::function<void(UIElement*)> onHover = nullptr;
+    std::function<void(UIElement*)> onFocus = nullptr;
+    std::function<void(UIElement*)> onBlur = nullptr;
 
     UIElement* parent = nullptr;
 

@@ -26,6 +26,14 @@ struct StyleSheet {
         if (it == styles.end()) return nullptr;
         return &it->second;
     }
+
+    // Convenience lookup for Global_<Type> style keys
+    const std::unordered_map<std::string, std::string>* getGlobalStyleForType(const std::string& type) const {
+        auto key = std::string("Global_") + type;
+        auto it = styles.find(key);
+        if (it == styles.end()) return nullptr;
+        return &it->second;
+    }
 };
 
 class BMLParser {
@@ -105,6 +113,31 @@ public:
     }
 
     std::shared_ptr<StyleSheet> getStyleSheet() const { return styles; }
+
+    // Global singleton access: library-wide parser used when loading BML stylesheet
+    static BMLParser& getGlobalParser() {
+        static BMLParser globalParser;
+        return globalParser;
+    }
+
+    // Return the Global_<Type> mapping if present (nullptr otherwise)
+    const std::unordered_map<std::string, std::string>* getGlobalStyleForType(const std::string& type) const {
+        if (!styles) return nullptr;
+        return styles->getGlobalStyleForType(type);
+    }
+
+    // Apply only-missing properties from a Global_<Type> style to element->properties
+    void applyGlobalStyleToElement(const std::string& type, BangUI::API::UIElement* element) const {
+        if (!element) return;
+        auto gs = getGlobalStyleForType(type);
+        if (!gs) return;
+        for (const auto& kv : *gs) {
+            // only set property if element hasn't explicitly provided it
+            if (element->properties.find(kv.first) == element->properties.end()) {
+                element->properties[kv.first] = kv.second;
+            }
+        }
+    }
 
     // Apply a named style to a UIElement by copying known properties into element->properties map
     void applyStyleToElement(const std::string& styleName, BangUI::API::UIElement* element) const {

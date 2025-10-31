@@ -10,6 +10,7 @@
 // These are lightweight and kept as before.
 #include "../models/Window.h"
 #include "../models/Panel.h"
+#include "DockPolicy.h"
 
 // Temporary debug trace for layout/drag issues. Remove or undefine when done.
 #define LAYOUT_DEBUG
@@ -148,38 +149,369 @@ public:
             return;
         }
 
-        // Parent safe content dimensions
-        float safeW = container->getSafeContentWidth();
-        float safeH = container->getSafeContentHeight();
-        float safeLeft = container->getSafeContentLeft();
-        float safeTop = container->getSafeContentTop();
+        // Parent safe content rectangle. Use container-specific helpers when available
+        float safeLeft, safeTop, safeRight, safeBottom;
+        if (Window* w = dynamic_cast<Window*>(container)) {
+            safeLeft = w->getSafeContentLeft();
+            safeTop = w->getSafeContentTop();
+            safeRight = w->getSafeContentRight();
+            safeBottom = w->getSafeContentBottom();
+        } else if (Panel* p = dynamic_cast<Panel*>(container)) {
+            safeLeft = p->getSafeContentLeft();
+            safeTop = p->getSafeContentTop();
+            safeRight = p->getSafeContentRight();
+            safeBottom = p->getSafeContentBottom();
+        } else {
+            safeLeft = container->getSafeContentLeft();
+            safeTop = container->getSafeContentTop();
+            safeRight = container->getSafeContentRight();
+            safeBottom = container->getSafeContentBottom();
+        }
+        float safeW = safeRight - safeLeft;
+        float safeH = safeBottom - safeTop;
 
-        for (UIElement* child : children) {
-            if (!child) continue;
-            if (child->manualPosition) {
-                // For manual-positioned children we compute layout to update size
-                // but preserve the child-local coordinates (localX/localY) so
-                // that subsequent layout passes don't reposition them.
-                float savedLocalX = child->localX;
-                float savedLocalY = child->localY;
-                computeElementLayout(child, safeW, safeH);
-                child->localX = savedLocalX;
-                child->localY = savedLocalY;
-            } else {
-                // Non-manual children get their local coords computed from docking/margins
-                child->x = child->marginLeft;
-                child->y = child->marginTop;
-                computeElementLayout(child, safeW, safeH);
-                child->localX = child->x;
-                child->localY = child->y;
+    // Choose docking policy from container (default ReserveStrips)
+    BangUI::impl::DockPolicy policy = BangUI::impl::DockPolicy::ReserveStrips;
+    if (Window* w = dynamic_cast<Window*>(container)) policy = w->dockPolicy;
+    else if (Panel* p = dynamic_cast<Panel*>(container)) policy = p->dockPolicy;
+
+    if (policy == BangUI::impl::DockPolicy::ReserveStrips) {
+            // Reserve top and bottom strips first
+            std::vector<UIElement*> topChildren;
+            std::vector<UIElement*> bottomChildren;
+            std::vector<UIElement*> leftChildren;
+            std::vector<UIElement*> rightChildren;
+            std::vector<UIElement*> centerChildren;
+            std::vector<UIElement*> noneChildren;
+
+            for (UIElement* child : children) {
+                if (!child) continue;
+                if (child->vDock == VDock::Top) topChildren.push_back(child);
+                else if (child->vDock == VDock::Bottom) bottomChildren.push_back(child);
+                else if (child->hDock == HDock::Left) leftChildren.push_back(child);
+                else if (child->hDock == HDock::Right) rightChildren.push_back(child);
+                else if (child->hDock == HDock::Center || child->vDock == VDock::Center) centerChildren.push_back(child);
+                else noneChildren.push_back(child);
             }
-            // Convert local coords to absolute coordinates using parent's safe origin
-            child->x = safeLeft + child->localX;
-            child->y = safeTop + child->localY;
-            if (Window* wchild = dynamic_cast<Window*>(child)) {
-                computeChildrenLayoutForContainer(wchild);
-            } else if (Panel* pchild = dynamic_cast<Panel*>(child)) {
-                computeChildrenLayoutForContainer(pchild);
+
+            // Compute heights for top/bottom using full safe width
+            float topStrip = 0.0f;
+            for (UIElement* c : topChildren) {
+                computeElementLayout(c, safeW, safeH);
+                topStrip += c->marginTop + c->height + c->marginBottom;
+            }
+            float bottomStrip = 0.0f;
+            for (UIElement* c : bottomChildren) {
+                computeElementLayout(c, safeW, safeH);
+                bottomStrip += c->marginTop + c->height + c->marginBottom;
+            }
+
+            // Reserve top/bottom
+            float innerLeft = 0.0f, innerTop = 0.0f, innerRight = safeW, innerBottom = safeH;
+            innerTop += topStrip;
+            innerBottom -= bottomStrip;
+            float innerW = innerRight - innerLeft;
+            float innerH = innerBottom - innerTop;
+
+            // Compute widths for left/right within inner height
+            float leftStrip = 0.0f;
+            for (UIElement* c : leftChildren) {
+                computeElementLayout(c, innerW, innerH);
+                leftStrip += c->marginLeft + c->width + c->marginRight;
+            }
+            float rightStrip = 0.0f;
+            for (UIElement* c : rightChildren) {
+                computeElementLayout(c, innerW, innerH);
+                rightStrip += c->marginLeft + c->width + c->marginRight;
+            }
+
+            // Reserve left/right
+            innerLeft += leftStrip;
+            innerRight -= rightStrip;
+            innerW = innerRight - innerLeft;
+            innerH = innerBottom - innerTop;
+
+            // Place Top children: allow left/center/right alignment within the top strip
+            {
+                std::vector<UIElement*> leftGroup, centerGroup, rightGroup;
+                for (UIElement* c : topChildren) {
+                    if (!c) continue;
+                    if (c->hDock == HDock::Center) centerGroup.push_back(c);
+                    else if (c->hDock == HDock::Right) rightGroup.push_back(c);
+                    else leftGroup.push_back(c); // default/None/Left -> left group
+                }
+
+                auto computeWidth = [&](const std::vector<UIElement*>& list) {
+                    float wsum = 0.0f;
+                    for (UIElement* c : list) wsum += c->marginLeft + c->width + c->marginRight;
+                    return wsum;
+                };
+
+                float leftW = computeWidth(leftGroup);
+                float rightW = computeWidth(rightGroup);
+                float centerW = computeWidth(centerGroup);
+
+                // Available width for center group between left and right groups
+                float availForCenter = safeW - leftW - rightW;
+                if (availForCenter < 0) availForCenter = 0;
+
+                // Place left group from left edge
+                float cursor = 0.0f;
+                for (UIElement* c : leftGroup) {
+                    float localX = cursor + c->marginLeft;
+                    float localY = c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    cursor = localX + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+
+                // Place center group centered in the remaining area
+                float centerStart = leftW + (availForCenter - centerW) / 2.0f;
+                float ccur = centerStart;
+                for (UIElement* c : centerGroup) {
+                    float localX = ccur + c->marginLeft;
+                    float localY = c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    ccur = localX + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+
+                // Place right group from right edge inward
+                float rcursor = 0.0f;
+                for (UIElement* c : rightGroup) {
+                    float localX = safeW - rcursor - c->marginRight - c->width;
+                    float localY = c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    rcursor += c->marginLeft + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+            }
+
+            // Place Bottom children: allow left/center/right alignment within the bottom strip
+            {
+                std::vector<UIElement*> leftGroup, centerGroup, rightGroup;
+                for (UIElement* c : bottomChildren) {
+                    if (!c) continue;
+                    if (c->hDock == HDock::Center) centerGroup.push_back(c);
+                    else if (c->hDock == HDock::Right) rightGroup.push_back(c);
+                    else leftGroup.push_back(c);
+                }
+
+                auto computeWidth = [&](const std::vector<UIElement*>& list) {
+                    float wsum = 0.0f;
+                    for (UIElement* c : list) wsum += c->marginLeft + c->width + c->marginRight;
+                    return wsum;
+                };
+
+                float leftW = computeWidth(leftGroup);
+                float rightW = computeWidth(rightGroup);
+                float centerW = computeWidth(centerGroup);
+
+                float availForCenter = safeW - leftW - rightW;
+                if (availForCenter < 0) availForCenter = 0;
+
+                // y base for bottom strip
+                float baseY = safeH - bottomStrip;
+
+                // Place left group
+                float cursor = 0.0f;
+                for (UIElement* c : leftGroup) {
+                    float localX = cursor + c->marginLeft;
+                    float localY = baseY + c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    cursor = localX + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+
+                // Place center group centered in remaining area
+                float centerStart = leftW + (availForCenter - centerW) / 2.0f;
+                float ccur = centerStart;
+                for (UIElement* c : centerGroup) {
+                    float localX = ccur + c->marginLeft;
+                    float localY = baseY + c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    ccur = localX + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+
+                // Place right group from right edge inward
+                float rcursor = 0.0f;
+                for (UIElement* c : rightGroup) {
+                    float localX = safeW - rcursor - c->marginRight - c->width;
+                    float localY = baseY + c->marginTop;
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    rcursor += c->marginLeft + c->width + c->marginRight;
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+            }
+
+            // Place Left children: top-to-bottom inside left strip
+            float leftCursorV = 0.0f;
+            for (UIElement* c : leftChildren) {
+                float localX = c->marginLeft;
+                float localY = innerTop + leftCursorV + c->marginTop - topStrip; // adjust relative to safeTop
+                // Instead, compute relative to inner top
+                localY = (innerTop - topStrip) + leftCursorV + c->marginTop; // conserve previous behavior
+                // To be safer, place relative to innerTop
+                localY = innerTop + leftCursorV + c->marginTop;
+                if (!c->manualPosition) {
+                    c->localX = localX;
+                    c->localY = localY;
+                }
+                leftCursorV = leftCursorV + c->height + c->marginTop + c->marginBottom;
+                c->x = safeLeft + c->localX;
+                c->y = safeTop + c->localY;
+                if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+            }
+
+            // Place Right children: top-to-bottom inside right strip
+            float rightCursorV = 0.0f;
+            for (UIElement* c : rightChildren) {
+                // place from right edge moving left by margin and width
+                float localX = innerRight - c->marginRight - c->width;
+                float localY = innerTop + rightCursorV + c->marginTop;
+                if (!c->manualPosition) {
+                    c->localX = localX;
+                    c->localY = localY;
+                }
+                rightCursorV = rightCursorV + c->height + c->marginTop + c->marginBottom;
+                c->x = safeLeft + c->localX;
+                c->y = safeTop + c->localY;
+                if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+            }
+
+            // Place center children and none children in the remaining inner rectangle
+            std::vector<UIElement*> middle = centerChildren;
+            middle.insert(middle.end(), noneChildren.begin(), noneChildren.end());
+
+            // For center group horizontally, lay out left-to-right centered as a group
+            if (!middle.empty()) {
+                // compute sizes for middle using innerW/innerH
+                float groupWidth = 0.0f;
+                float maxHeight = 0.0f;
+                for (UIElement* c : middle) {
+                    computeElementLayout(c, innerW, innerH);
+                    groupWidth += c->marginLeft + c->width + c->marginRight;
+                    maxHeight = std::max(maxHeight, c->height + c->marginTop + c->marginBottom);
+                }
+                float startX = innerLeft + (innerW - groupWidth) / 2.0f;
+                float cursorX = startX;
+                float centerY = innerTop + (innerH - maxHeight) / 2.0f;
+                for (UIElement* c : middle) {
+                    float localX = cursorX + c->marginLeft;
+                    float localY = centerY + c->marginTop;
+                    // Respect manualPosition: do not overwrite manually-set localX/localY
+                    if (!c->manualPosition) {
+                        c->localX = localX;
+                        c->localY = localY;
+                    }
+                    c->x = safeLeft + c->localX;
+                    c->y = safeTop + c->localY;
+                    cursorX = localX + c->width + c->marginRight;
+                    if (Window* wchild = dynamic_cast<Window*>(c)) computeChildrenLayoutForContainer(wchild);
+                    else if (Panel* pchild = dynamic_cast<Panel*>(c)) computeChildrenLayoutForContainer(pchild);
+                }
+            }
+
+        } else {
+            // Fallback: cursor stacking (original behavior)
+            float leftCursor = 0.0f;
+            float rightCursor = safeW;
+            float topCursor = 0.0f;
+            float bottomCursor = safeH;
+
+            for (UIElement* child : children) {
+                if (!child) continue;
+
+                if (child->manualPosition) {
+                    float savedLocalX = child->localX;
+                    float savedLocalY = child->localY;
+                    computeElementLayout(child, safeW, safeH);
+                    child->localX = savedLocalX;
+                    child->localY = savedLocalY;
+                } else {
+                    computeElementLayout(child, safeW, safeH);
+                    float localX = 0.0f;
+                    switch (child->hDock) {
+                        case HDock::Left:
+                            localX = leftCursor + child->marginLeft;
+                            leftCursor = localX + child->width + child->marginRight;
+                            break;
+                        case HDock::Right:
+                            localX = rightCursor - child->marginRight - child->width;
+                            rightCursor = localX - child->marginLeft;
+                            break;
+                        case HDock::Center:
+                            localX = (safeW - child->width) / 2.0f;
+                            break;
+                        case HDock::None:
+                        default:
+                            localX = child->marginLeft;
+                            break;
+                    }
+                    float localY = 0.0f;
+                    switch (child->vDock) {
+                        case VDock::Top:
+                            localY = topCursor + child->marginTop;
+                            topCursor = localY + child->height + child->marginBottom;
+                            break;
+                        case VDock::Bottom:
+                            localY = bottomCursor - child->marginBottom - child->height;
+                            bottomCursor = localY - child->marginTop;
+                            break;
+                        case VDock::Center:
+                            localY = (safeH - child->height) / 2.0f;
+                            break;
+                        case VDock::None:
+                        default:
+                            localY = child->marginTop;
+                            break;
+                    }
+                    child->localX = localX;
+                    child->localY = localY;
+                }
+                child->x = safeLeft + child->localX;
+                child->y = safeTop + child->localY;
+                if (Window* wchild = dynamic_cast<Window*>(child)) computeChildrenLayoutForContainer(wchild);
+                else if (Panel* pchild = dynamic_cast<Panel*>(child)) computeChildrenLayoutForContainer(pchild);
             }
         }
     }

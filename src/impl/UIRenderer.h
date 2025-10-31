@@ -5,11 +5,16 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <sstream>
 #include "../models/Window.h"
 #include "../models/Panel.h"
+#include "../api/IRenderer.h"
 #include "TextureManager.h"
 #include "FontManager.h"
 #include "NineSliceTexture.h"
+#include "ButtonImpl.h"
+#include "LabelImpl.h"
+#include <iostream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -23,8 +28,13 @@ private:
     SDL_Renderer* renderer;
     TextureManager* textureManager;
     FontManager* fontManager;
+    // Optional diegetic mapper provided by higher-level renderer
+    BangUI::API::IRenderer::DiegeticMapperFn diegeticMapper = nullptr;
 
-    // Draw a properly rounded rectangle using composite shapes
+    // Draw a properly rounded rectangle using scanline rasterization
+    // This fills the rounded rectangle in a single pass by computing left/right x
+    // positions for each scanline using the circle equation. It avoids seams and
+    // provides pixel-perfect coverage by snapping to the integer pixel grid.
     void drawRoundedRectangle(float x, float y, float w, float h, float radius) {
         if (radius <= 0 || radius > std::min(w, h) / 2.0f) {
             // No rounding or radius too large - draw normal rectangle
@@ -33,61 +43,157 @@ private:
             return;
         }
 
-        // Draw the main rectangle parts (avoiding corners)
-        // Center horizontal rectangle
-        SDL_FRect centerH = {x + radius, y, w - 2 * radius, h};
-        SDL_RenderFillRect(renderer, &centerH);
+        // Convert to integer pixel extents for scanline iteration
+        int ix = static_cast<int>(floorf(x));
+        int iy = static_cast<int>(floorf(y));
+        int iw = static_cast<int>(ceilf(x + w)) - ix;
+        int ih = static_cast<int>(ceilf(y + h)) - iy;
 
-        // Left and right vertical strips
-        SDL_FRect leftV = {x, y + radius, radius, h - 2 * radius};
-        SDL_RenderFillRect(renderer, &leftV);
+        // floating radius for math
+        float r = radius;
+        float top_cy = y + r;
+        float bottom_cy = y + h - r;
 
-        SDL_FRect rightV = {x + w - radius, y + radius, radius, h - 2 * radius};
-        SDL_RenderFillRect(renderer, &rightV);
+        for (int dy = 0; dy < ih; ++dy) {
+            // center of this pixel row
+            float py = static_cast<float>(iy + dy) + 0.5f;
 
-        // Draw filled circles at the four corners using scanline method
-        drawFilledCircleQuarter(x + radius, y + radius, radius, 2); // Top-left (quadrant 2)
-        drawFilledCircleQuarter(x + w - radius, y + radius, radius, 1); // Top-right (quadrant 1)
-        drawFilledCircleQuarter(x + radius, y + h - radius, radius, 3); // Bottom-left (quadrant 3)
-        drawFilledCircleQuarter(x + w - radius, y + h - radius, radius, 4); // Bottom-right (quadrant 4)
-    }
+            float left_f = x;
+            float right_f = x + w;
 
-    // Draw a filled quarter circle (one quadrant) using scanline fill
-    void drawFilledCircleQuarter(float cx, float cy, float radius, int quadrant) {
-        int r = (int)radius;
-
-        for (int dy = 0; dy <= r; dy++) {
-            int dx = (int)sqrt(r * r - dy * dy);
-
-            float y1, x1, x2;
-
-            switch (quadrant) {
-                case 1: // Top-right
-                    y1 = cy - dy;
-                    x1 = cx;
-                    x2 = cx + dx;
-                    break;
-                case 2: // Top-left
-                    y1 = cy - dy;
-                    x1 = cx - dx;
-                    x2 = cx;
-                    break;
-                case 3: // Bottom-left
-                    y1 = cy + dy;
-                    x1 = cx - dx;
-                    x2 = cx;
-                    break;
-                case 4: // Bottom-right
-                    y1 = cy + dy;
-                    x1 = cx;
-                    x2 = cx + dx;
-                    break;
-                default:
-                    return;
+            if (py < top_cy) {
+                // top rounded region
+                float offset = top_cy - py;
+                if (offset > r) offset = r;
+                float chord = sqrtf(std::max(0.0f, r * r - offset * offset));
+                left_f = x + r - chord;
+                right_f = x + w - r + chord;
+            } else if (py > bottom_cy) {
+                // bottom rounded region
+                float offset = py - bottom_cy;
+                if (offset > r) offset = r;
+                float chord = sqrtf(std::max(0.0f, r * r - offset * offset));
+                left_f = x + r - chord;
+                right_f = x + w - r + chord;
             }
 
-            SDL_RenderLine(renderer, x1, y1, x2, y1);
+            // Convert float coverage to integer pixel indices using pixel-center test
+            int start_p = static_cast<int>(ceilf(left_f - 0.5f));
+            int end_p = static_cast<int>(floorf(right_f - 0.5f));
+
+            if (start_p <= end_p) {
+                // Use integer 1-pixel high rects for deterministic coverage
+                SDL_FRect scanF;
+                scanF.x = static_cast<float>(start_p);
+                scanF.y = static_cast<float>(iy + dy);
+                scanF.w = static_cast<float>(end_p - start_p + 1);
+                scanF.h = 1.0f;
+                SDL_RenderFillRect(renderer, &scanF);
+            }
         }
+    }
+
+    // Draw a rectangle where only the top corners are rounded (bottom edge is straight)
+    void drawRoundedTopRectangle(float x, float y, float w, float h, float radius) {
+        if (radius <= 0 || radius > std::min(w, h) / 2.0f) {
+            // No rounding or radius too large - draw normal rectangle
+            SDL_FRect rect = {x, y, w, h};
+            SDL_RenderFillRect(renderer, &rect);
+            return;
+        }
+
+        int ix = static_cast<int>(floorf(x));
+        int iy = static_cast<int>(floorf(y));
+        int iw = static_cast<int>(ceilf(x + w)) - ix;
+        int ih = static_cast<int>(ceilf(y + h)) - iy;
+
+        float r = radius;
+        float top_cy = y + r;
+
+        for (int dy = 0; dy < ih; ++dy) {
+            float py = static_cast<float>(iy + dy) + 0.5f;
+
+            float left_f = x;
+            float right_f = x + w;
+
+            if (py < top_cy) {
+                float offset = top_cy - py;
+                if (offset > r) offset = r;
+                float chord = sqrtf(std::max(0.0f, r * r - offset * offset));
+                left_f = x + r - chord;
+                right_f = x + w - r + chord;
+            }
+
+            int start_p = static_cast<int>(ceilf(left_f - 0.5f));
+            int end_p = static_cast<int>(floorf(right_f - 0.5f));
+
+            if (start_p <= end_p) {
+                SDL_FRect scanF;
+                scanF.x = static_cast<float>(start_p);
+                scanF.y = static_cast<float>(iy + dy);
+                scanF.w = static_cast<float>(end_p - start_p + 1);
+                scanF.h = 1.0f;
+                SDL_RenderFillRect(renderer, &scanF);
+            }
+        }
+    }
+
+    // Diagnostic helper: read pixels from renderer and write a BMP for inspection
+    // Diagnostic helper: render the specified rounded-rect body into an
+    // RGBA render-target (cleared to transparent), read back pixels and
+    // write a BMP. This preserves the drawn alpha channel so we can
+    // inspect whether corner pixels are transparent or opaque.
+    void dumpWindowBodyToAlphaBMP(float wx, float wy, float ww, float wh, float wradius,
+                                  Uint8 bodyR, Uint8 bodyG, Uint8 bodyB, Uint8 bodyA,
+                                  const char* filename) {
+        int rw = static_cast<int>(std::min(ww, 4096.0f));
+        int rh = static_cast<int>(std::min(wh, 4096.0f));
+        if (rw <= 0 || rh <= 0) return;
+
+        // Create an RGBA render target to draw only the window body into
+        SDL_Texture* target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
+                                                SDL_TEXTUREACCESS_TARGET, rw, rh);
+        if (!target) return;
+        SDL_SetTextureBlendMode(target, SDL_BLENDMODE_BLEND);
+
+        // Save previous target so we can restore it
+        SDL_Texture* prevTarget = SDL_GetRenderTarget(renderer);
+
+        // Bind our target, clear to transparent, draw the rounded rect at 0,0
+        SDL_SetRenderTarget(renderer, target);
+        // Clear transparent
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+
+        // Draw the window body into the target using the same rasterizer,
+        // but translated to target local coordinates (0,0).
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
+        drawRoundedRectangle(0.0f, 0.0f, static_cast<float>(rw), static_cast<float>(rh), wradius);
+
+        // Read pixels from the target (SDL_RenderReadPixels reads current target)
+        SDL_Surface* surf = SDL_RenderReadPixels(renderer, nullptr);
+
+        // Restore previous target
+        SDL_SetRenderTarget(renderer, prevTarget);
+
+        if (!surf) {
+            SDL_DestroyTexture(target);
+            return;
+        }
+
+        SDL_SaveBMP(surf, filename);
+        SDL_DestroySurface(surf);
+        SDL_DestroyTexture(target);
+    }
+
+    // Dump the current framebuffer (what's been rendered so far) to a BMP.
+    void dumpFramebufferToBMP(const char* filename) {
+        SDL_Surface* surf = SDL_RenderReadPixels(renderer, nullptr);
+        if (!surf) return;
+        SDL_SaveBMP(surf, filename);
+        SDL_DestroySurface(surf);
     }
 
     // Draw a rounded rectangle border
@@ -133,14 +239,18 @@ private:
     // Render a textured rectangle with optional color overlay blending
     // The color's alpha channel determines how much the color blends over the texture
     void renderTexturedRectangle(SDL_Texture* texture, float x, float y, float w, float h,
-                                 Uint8 r, Uint8 g, Uint8 b, Uint8 textureA, Uint8 overlayA) {
+                                 Uint8 r, Uint8 g, Uint8 b, Uint8 textureA, Uint8 overlayA,
+                                 float rotation = 0.0f) {
         SDL_FRect destRect = {x, y, w, h};
 
         // Apply alpha modulation to the texture so overall opacity can be controlled
         SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
         SDL_SetTextureAlphaMod(texture, textureA);
 
-        // First, render the texture
+        // Render the texture, use rotation if requested
+        // Rotation is currently not applied here due to SDL compatibility wrappers.
+        // If rotation is requested, we fall back to unrotated rendering for now.
+        (void)rotation;
         SDL_RenderTexture(renderer, texture, nullptr, &destRect);
 
         // If overlay alpha > 0, blend the color over the texture based on overlay strength
@@ -153,7 +263,8 @@ private:
 
     // Render a textured rounded rectangle with optional color overlay blending
     void renderTexturedRoundedRectangle(SDL_Texture* texture, float x, float y, float w, float h,
-                                       float radius, Uint8 r, Uint8 g, Uint8 b, Uint8 textureA, Uint8 overlayA) {
+                                       float radius, Uint8 r, Uint8 g, Uint8 b, Uint8 textureA, Uint8 overlayA,
+                                       float rotation = 0.0f) {
         // For rounded rectangles with textures, we need to use a clip mask approach
         // This is a simplified version - render texture first, then overlay color with rounding
 
@@ -165,9 +276,9 @@ private:
         SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
         SDL_SetTextureAlphaMod(texture, textureA);
 
+        // For rounded rectangles, if rotation is requested we render into a temp texture and rotate when blitting
+        // Rotation not applied due to SDL compatibility. Render unrotated.
         SDL_RenderTexture(renderer, texture, nullptr, &destRect);
-
-        // Blend color over texture with rounded rectangle shape
         if (overlayA > 0) {
             SDL_SetRenderDrawColor(renderer, r, g, b, overlayA);
             SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -179,6 +290,10 @@ public:
     UIRenderer(SDL_Renderer* sdlRenderer) : renderer(sdlRenderer) {
         textureManager = new TextureManager(sdlRenderer);
         fontManager = new FontManager();
+    }
+
+    void setDiegeticMapper(BangUI::API::IRenderer::DiegeticMapperFn fn) {
+        diegeticMapper = fn;
     }
 
     ~UIRenderer() {
@@ -195,31 +310,43 @@ public:
         return fontManager;
     }
 
+    // Expose measurement to callers via the public API so input code can
+    // compute scroll extents using the same logic as the renderer.
+    void measureElementRenderedSize(UIElement* element, float maxW, float maxH, float& outW, float& outH) {
+        this->measureElementRenderedSizeImpl(element, maxW, maxH, outW, outH);
+    }
+
     // Render a panel with its properties
     void renderPanel(const Panel* panel) {
         if (!panel->visible) return;
+
+        // If this panel is diegetic, attempt to resolve a screen transform
+        float origX = panel->x, origY = panel->y, origW = panel->width, origH = panel->height;
+        float mappedX = origX, mappedY = origY, mappedScale = 1.0f, mappedRot = 0.0f;
+        bool useMapped = false;
+        if (panel->renderSpace == "diegetic" && diegeticMapper && panel->anchorMesh) {
+            // anchorMesh.resource holds the pointer we pass to the mapper
+            useMapped = diegeticMapper(panel->anchorMesh->resource, panel->anchorBone.c_str(), &mappedX, &mappedY, &mappedScale, &mappedRot);
+        }
 
         // Check if panel has a 9-slice texture
         NineSliceTexture* nineSlice = nullptr;
         SDL_Texture* texture = nullptr;
 
-    // Get Colors
-    Uint8 r = panel->backgroundColor.r;
-    Uint8 g = panel->backgroundColor.g;
-    Uint8 b = panel->backgroundColor.b;
-    Uint8 a = panel->backgroundColor.a;
+        // Get Colors
+        Uint8 r = panel->backgroundColor.r;
+        Uint8 g = panel->backgroundColor.g;
+        Uint8 b = panel->backgroundColor.b;
+        Uint8 a = panel->backgroundColor.a;
 
-    // overlayAlpha is the alpha of the background color used for color overlays
-    Uint8 overlayAlpha = a;
-    // textureAlpha: if background alpha is 0 (no overlay color), use full texture alpha (255),
-    // otherwise use the background alpha. Multiply by panel opacity to get final texture alpha.
-    int texAlphaInt = static_cast<int>((overlayAlpha == 0 ? 255 : overlayAlpha) * panel->opacity + 0.5f);
-    if (texAlphaInt < 0) texAlphaInt = 0; if (texAlphaInt > 255) texAlphaInt = 255;
-    Uint8 texA = static_cast<Uint8>(texAlphaInt);
-    // overlayAlpha multiplied by opacity for color overlays
-    int overlayAlphaInt = static_cast<int>(overlayAlpha * panel->opacity + 0.5f);
-    if (overlayAlphaInt < 0) overlayAlphaInt = 0; if (overlayAlphaInt > 255) overlayAlphaInt = 255;
-    Uint8 overlayA = static_cast<Uint8>(overlayAlphaInt);
+        // overlayAlpha is the alpha of the background color used for color overlays
+        Uint8 overlayAlpha = a;
+        int texAlphaInt = static_cast<int>((overlayAlpha == 0 ? 255 : overlayAlpha) * panel->opacity + 0.5f);
+        if (texAlphaInt < 0) texAlphaInt = 0; if (texAlphaInt > 255) texAlphaInt = 255;
+        Uint8 texA = static_cast<Uint8>(texAlphaInt);
+        int overlayAlphaInt = static_cast<int>(overlayAlpha * panel->opacity + 0.5f);
+        if (overlayAlphaInt < 0) overlayAlphaInt = 0; if (overlayAlphaInt > 255) overlayAlphaInt = 255;
+        Uint8 overlayA = static_cast<Uint8>(overlayAlphaInt);
 
         if (!panel->src.empty()) {
             if (NineSliceTexture::isNinePatchFile(panel->src)) {
@@ -229,84 +356,193 @@ public:
             }
         }
 
+        // Render panel directly with SDL alpha blending
         if (nineSlice) {
-            // Render 9-slice texture (handles stretching automatically)
-            nineSlice->render(renderer, panel->x, panel->y, panel->width, panel->height, static_cast<Uint8>(panel->backgroundColor.a * panel->opacity));
-
-            // Set safe content area to center patch only
-            nineSlice->getSafeContentInsets(
-                const_cast<Panel*>(panel)->contentLeft,
-                const_cast<Panel*>(panel)->contentTop,
-                const_cast<Panel*>(panel)->contentRight,
-                const_cast<Panel*>(panel)->contentBottom
-            );
-
-            if (overlayA > 0) {
+            if (useMapped) {
+                nineSlice->render(renderer, mappedX, mappedY, panel->width * mappedScale, panel->height * mappedScale, static_cast<Uint8>(panel->backgroundColor.a * panel->opacity));
+            } else {
+                nineSlice->render(renderer, panel->x, panel->y, panel->width, panel->height, static_cast<Uint8>(panel->backgroundColor.a * panel->opacity));
+            }
+        } else if (texture) {
+            if (panel->cornerRadius > 0) {
+                if (useMapped) renderTexturedRoundedRectangle(texture, mappedX, mappedY, panel->width * mappedScale, panel->height * mappedScale, panel->cornerRadius * mappedScale, r, g, b, texA, overlayA, mappedRot);
+                else renderTexturedRoundedRectangle(texture, panel->x, panel->y, panel->width, panel->height, panel->cornerRadius, r, g, b, texA, overlayA, 0.0f);
+            } else {
+                if (useMapped) renderTexturedRectangle(texture, mappedX, mappedY, panel->width * mappedScale, panel->height * mappedScale, r, g, b, texA, overlayA, mappedRot);
+                else renderTexturedRectangle(texture, panel->x, panel->y, panel->width, panel->height, r, g, b, texA, overlayA, 0.0f);
+            }
+        } else {
+            if (useMapped) {
+                SDL_SetRenderDrawColor(renderer, r, g, b, overlayA);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                drawRoundedRectangle(mappedX, mappedY, panel->width * mappedScale, panel->height * mappedScale, panel->cornerRadius * mappedScale);
+            } else {
                 SDL_SetRenderDrawColor(renderer, r, g, b, overlayA);
                 SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
                 drawRoundedRectangle(panel->x, panel->y, panel->width, panel->height, panel->cornerRadius);
             }
-        } else if (texture) {
-            // Render regular textured panel with color overlay based on backgroundColor alpha
-            // Regular texture - entire area is safe
-            const_cast<Panel*>(panel)->contentLeft = 0.0f;
-            const_cast<Panel*>(panel)->contentTop = 0.0f;
-            const_cast<Panel*>(panel)->contentRight = 0.0f;
-            const_cast<Panel*>(panel)->contentBottom = 0.0f;
-
-            if (panel->cornerRadius > 0) {
-                    renderTexturedRoundedRectangle(texture, panel->x, panel->y, panel->width, panel->height,
-                                                  panel->cornerRadius, r, g, b, texA, overlayA);
-            } else {
-                // Use texA and overlayA so textures colorize correctly and respect opacity
-                    renderTexturedRectangle(texture, panel->x, panel->y, panel->width, panel->height,
-                                           r, g, b, texA, overlayA);
-            }
-        } else {
-            // Draw the solid color rounded rectangle shape
-            SDL_SetRenderDrawColor(renderer, r, g, b, overlayA);
-            drawRoundedRectangle(panel->x, panel->y, panel->width, panel->height, panel->cornerRadius);
         }
 
-        // Border (lighter color) - now rounded to match the shape!
-        uint8_t br = panel->borderColor.r;
-        uint8_t bg = panel->borderColor.g;
-        uint8_t bb = panel->borderColor.b;
-        uint8_t ba = panel->borderColor.a;
-        SDL_SetRenderDrawColor(renderer, br, bg, bb, ba);
-        drawRoundedRectangleBorder(panel->x, panel->y, panel->width, panel->height, panel->cornerRadius);
-
+    // Note: border drawing is deferred until after children are rendered so
+        // Renderer mustn't change panel scroll offsets. UIManager is
+        // authoritative for input/state changes. Use local clamping
+        // when computing thumb positions.
         // Drag indicator
         if (panel->isBeingDragged) {
             SDL_SetRenderDrawColor(renderer, 255, 255, 0, 128);
             drawRoundedRectangleBorder(panel->x + 5, panel->y + 5, panel->width - 10, panel->height - 10,
                                       panel->cornerRadius > 5 ? panel->cornerRadius - 5 : 0);
         }
-            // render children clipped to the panel's safe content area using integer clip rects
-            // Render children only if they intersect the panel's safe content area (coarse clipping)
-            SDL_FRect safeArea;
-            safeArea.x = panel->getSafeContentLeft();
-            safeArea.y = panel->getSafeContentTop();
-            safeArea.w = panel->getSafeContentRight() - panel->getSafeContentLeft();
-            safeArea.h = panel->getSafeContentBottom() - panel->getSafeContentTop();
 
-            for (UIElement* child : panel->content) {
-                if (!child) continue;
-                SDL_FRect childRect = { child->x, child->y, child->width, child->height };
-                bool intersects = !(childRect.x + childRect.w <= safeArea.x ||
-                                    childRect.x >= safeArea.x + safeArea.w ||
-                                    childRect.y + childRect.h <= safeArea.y ||
-                                    childRect.y >= safeArea.y + safeArea.h);
-                if (intersects) {
-                    renderElement(child);
+                // render children clipped to the panel's safe content area using integer clip rects
+                // Render children only if they intersect the panel's safe content area (coarse clipping)
+                SDL_FRect safeAreaF;
+                safeAreaF.x = panel->getSafeContentLeft();
+                safeAreaF.y = panel->getSafeContentTop();
+                safeAreaF.w = panel->getSafeContentRight() - panel->getSafeContentLeft();
+                safeAreaF.h = panel->getSafeContentBottom() - panel->getSafeContentTop();
+
+                // Convert to integer SDL_Rect for clipping (floor/ceil to be safe)
+                SDL_Rect clipRect;
+                clipRect.x = static_cast<int>(floorf(safeAreaF.x));
+                clipRect.y = static_cast<int>(floorf(safeAreaF.y));
+                clipRect.w = static_cast<int>(ceilf(safeAreaF.w));
+                clipRect.h = static_cast<int>(ceilf(safeAreaF.h));
+
+                // Expand the clip rect slightly to avoid cutting off rounded corner pixels
+                // from child elements (prevents seams caused by tight integer clipping).
+                const int clipPad = 2; // pixels
+                clipRect.x = std::max(0, clipRect.x - clipPad);
+                clipRect.y = std::max(0, clipRect.y - clipPad);
+                clipRect.w = clipRect.w + 2 * clipPad;
+                clipRect.h = clipRect.h + 2 * clipPad;
+
+                bool didClip = false;
+                if (clipRect.w > 0 && clipRect.h > 0) {
+                    if (panel->id == "panelB_nowrap" || panel->id == "winD_scroll_both") {
+                        std::cerr << "[DIAG][panel] clipRect=(x=" << clipRect.x << ",y=" << clipRect.y << ",w=" << clipRect.w << ",h=" << clipRect.h << ")" << std::endl;
+                    }
+                    SDL_SetRenderClipRect(renderer, &clipRect);
+                    didClip = true;
                 }
-            }
-    }
+
+                for (UIElement* child : panel->content) {
+                    if (!child) continue;
+                    // Account for panel scroll offsets when computing child positions for clipping/rendering
+                    float measuredW = child->width, measuredH = child->height;
+                    measureElementRenderedSize(child, safeAreaF.w, safeAreaF.h, measuredW, measuredH);
+                    SDL_FRect childRect = { child->x - panel->scrollX, child->y - panel->scrollY, measuredW, measuredH };
+                    // Allow a 1-pixel tolerance to avoid accidental exclusion due to float->int rounding
+                    const float EPS = 2.0f;
+                    bool intersects = !((childRect.x + childRect.w) <= (safeAreaF.x + EPS) ||
+                                        (childRect.x) >= (safeAreaF.x + safeAreaF.w - EPS) ||
+                                        (childRect.y + childRect.h) <= (safeAreaF.y + EPS) ||
+                                        (childRect.y) >= (safeAreaF.y + safeAreaF.h - EPS));
+                    // Diagnostic logging for specific demo panels
+                    if (panel->id == "panelB_nowrap" || panel->id == "winD_scroll_both") {
+                        std::cerr << "[DIAG][panel] id=" << panel->id
+                                  << " scrollX=" << panel->scrollX << " scrollY=" << panel->scrollY
+                                  << " safeArea=(" << safeAreaF.x << "," << safeAreaF.y << "," << safeAreaF.w << "," << safeAreaF.h << ")"
+                                  << " child=(x=" << child->x << ",y=" << child->y << ",w=" << measuredW << ",h=" << measuredH << ")"
+                                  << " childRect=(x=" << childRect.x << ",y=" << childRect.y << ",w=" << childRect.w << ",h=" << childRect.h << ")"
+                                  << " intersects=" << intersects << std::endl;
+                    }
+                    if (intersects) {
+                        // Temporarily translate renderer by negative scroll to draw children in scrolled coordinates
+                        float prevX = child->x;
+                        float prevY = child->y;
+                        float transX = prevX - panel->scrollX;
+                        float transY = prevY - panel->scrollY;
+                        if (panel->id == "panelB_nowrap" || panel->id == "winD_scroll_both") {
+                            std::cerr << "[DIAG][panel] will render child at translated=(" << transX << "," << transY << ") prev=(" << prevX << "," << prevY << ")" << std::endl;
+                        }
+                        child->x = transX;
+                        child->y = transY;
+                        renderElement(child);
+                        child->x = prevX;
+                        child->y = prevY;
+                    }
+                }
+
+                if (didClip) SDL_SetRenderClipRect(renderer, nullptr);
+
+                // Draw border outside the panel bounds so it doesn't reduce safe content.
+                if (panel->borderWidth > 0.0f) {
+                    uint8_t brc = panel->borderColor.r;
+                    uint8_t bgc = panel->borderColor.g;
+                    uint8_t bbc = panel->borderColor.b;
+                    uint8_t bac = static_cast<Uint8>(panel->borderColor.a * panel->opacity);
+                    SDL_SetRenderDrawColor(renderer, brc, bgc, bbc, bac);
+                    float bw = panel->borderWidth;
+                    drawRoundedRectangleBorder(panel->x - bw, panel->y - bw, panel->width + 2*bw, panel->height + 2*bw, panel->cornerRadius + bw);
+                }
+                // Draw scrollbars for panel (overlay)
+                if (!panel->scrollable.empty()) {
+                    // Use per-axis fade timers so each scrollbar only appears when its axis is active
+                    float tY = std::max(0.0f, std::min(panel->scrollBarFadeTimerY / panel->scrollBarFadeDuration, 1.0f));
+                    float tX = std::max(0.0f, std::min(panel->scrollBarFadeTimerX / panel->scrollBarFadeDuration, 1.0f));
+                    Uint8 alphaY = static_cast<Uint8>(255 * tY);
+                    Uint8 alphaX = static_cast<Uint8>(255 * tX);
+                    float safeLeft = panel->getSafeContentLeft();
+                    float safeTop = panel->getSafeContentTop();
+                    float safeW = panel->getSafeContentRight() - panel->getSafeContentLeft();
+                    float safeH = panel->getSafeContentBottom() - panel->getSafeContentTop();
+                    // compute content extents (measure rendered sizes for elements like Label)
+                    float contentW = 0.0f, contentH = 0.0f;
+                    for (UIElement* c : panel->content) {
+                        if (!c) continue;
+                        float measuredW = c->width;
+                        float measuredH = c->height;
+                        measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
+                        contentW = std::max(contentW, c->x + measuredW);
+                        contentH = std::max(contentH, c->y + measuredH);
+                    }
+                    // Clamp panel scroll offsets to measured content extents to avoid overscroll
+                    // Do NOT modify stored panel scroll values from the renderer.
+                    // Previously this code wrote back into panel->scrollX/Y which
+                    // changed runtime scrolling behavior. Keep the renderer
+                    // read-only and compute clamped values locally where needed
+                    // for visual mapping only.
+                    // Vertical
+                    if ((panel->scrollable == "vertical" || panel->scrollable == "both") && contentH > safeH + 1.0f) {
+                        float sbw = 8.0f;
+                        float sbx = safeLeft + safeW - sbw - 4.0f;
+                        float sby = safeTop + 4.0f;
+                        float sbh = safeH - 8.0f;
+                        SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<Uint8>(alphaY * 0.35f));
+                        SDL_FRect bg = {sbx, sby, sbw, sbh};
+                        SDL_RenderFillRect(renderer, &bg);
+                        float thumbH = std::max(16.0f, sbh * (safeH / contentH));
+                        float maxScroll = std::max(0.0f, contentH - safeH);
+                        float rel = (maxScroll > 0.0f) ? (panel->scrollY / maxScroll) : 0.0f;
+                        float thumbY = sby + rel * (sbh - thumbH);
+                        SDL_SetRenderDrawColor(renderer, 200, 200, 200, alphaY);
+                        SDL_FRect thumb = {sbx + 1.0f, thumbY, sbw - 2.0f, thumbH};
+                        SDL_RenderFillRect(renderer, &thumb);
+                    }
+                    // Horizontal
+                    if ((panel->scrollable == "horizontal" || panel->scrollable == "both") && contentW > safeW + 1.0f) {
+                        float sbh = 8.0f;
+                        float sbx = safeLeft + 4.0f;
+                        float sby = safeTop + safeH - sbh - 4.0f;
+                        float sbw = safeW - 8.0f;
+                        SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<Uint8>(alphaX * 0.35f));
+                        SDL_FRect bg = {sbx, sby, sbw, sbh};
+                        SDL_RenderFillRect(renderer, &bg);
+                        float thumbW = std::max(16.0f, sbw * (safeW / contentW));
+                        float maxScroll = std::max(0.0f, contentW - safeW);
+                        float rel = (maxScroll > 0.0f) ? (panel->scrollX / maxScroll) : 0.0f;
+                        float thumbX = sbx + rel * (sbw - thumbW);
+                        SDL_SetRenderDrawColor(renderer, 200, 200, 200, alphaX);
+                        SDL_FRect thumb = {thumbX, sby + 1.0f, thumbW, sbh - 2.0f};
+                        SDL_RenderFillRect(renderer, &thumb);
+                    }
+                }
+        }
 
     // Render a window with title bar and close button
     void renderWindow(const Window* win) {
         if (!win->visible) return;
-
         float x = win->x;
         float y = win->y;
         float w = win->width;
@@ -317,6 +553,13 @@ public:
         // Clamp radius
         if (radius > std::min(w, h) / 2.0f) {
             radius = std::min(w, h) / 2.0f;
+        }
+
+        // Diegetic mapping for window
+        float mappedX = x, mappedY = y, mappedScale = 1.0f, mappedRot = 0.0f;
+        bool useMapped = false;
+        if (win->renderSpace == "diegetic" && diegeticMapper && win->anchorMesh) {
+            useMapped = diegeticMapper(win->anchorMesh->resource, win->anchorBone.c_str(), &mappedX, &mappedY, &mappedScale, &mappedRot);
         }
 
         // Check if window has a texture
@@ -334,10 +577,21 @@ public:
             }
         }
 
-        // If texture exists, render ONLY the texture (no title bar, no border, no color)
+    // Cache title/body color values (used by rendering and diagnostic dumps)
+    Uint8 titleR = win->titleBarColor.r;
+    Uint8 titleG = win->titleBarColor.g;
+    Uint8 titleB = win->titleBarColor.b;
+    Uint8 titleA = static_cast<Uint8>(win->titleBarColor.a * win->opacity);
+    Uint8 bodyA = static_cast<Uint8>(win->backgroundColor.a * win->opacity);
+    Uint8 bodyR = win->backgroundColor.r;
+    Uint8 bodyG = win->backgroundColor.g;
+    Uint8 bodyB = win->backgroundColor.b;
+
+    // If texture exists, render ONLY the texture (no title bar, no border, no color)
         if (hasTexture) {
             if (nineSlice) {
-                nineSlice->render(renderer, x, y, w, h);
+                if (useMapped) nineSlice->render(renderer, mappedX, mappedY, w * mappedScale, h * mappedScale);
+                else nineSlice->render(renderer, x, y, w, h);
                 // Set safe content area to center patch only
                 nineSlice->getSafeContentInsets(
                     const_cast<Window*>(win)->contentLeft,
@@ -346,8 +600,11 @@ public:
                     const_cast<Window*>(win)->contentBottom
                 );
             } else if (texture) {
-                SDL_FRect destRect = {x, y, w, h};
-                SDL_RenderTexture(renderer, texture, nullptr, &destRect);
+                if (useMapped) {
+                    renderTexturedRectangle(texture, mappedX, mappedY, w * mappedScale, h * mappedScale, 255,255,255,255,0, mappedRot);
+                } else {
+                    renderTexturedRectangle(texture, x, y, w, h, 255,255,255,255,0, 0.0f);
+                }
                 // Regular texture - entire area is safe
                 const_cast<Window*>(win)->contentLeft = 0.0f;
                 const_cast<Window*>(win)->contentTop = 0.0f;
@@ -355,218 +612,374 @@ public:
                 const_cast<Window*>(win)->contentBottom = 0.0f;
             }
         } else {
-            // No texture - render traditional window with title bar and body
-            // Get title bar color from window property
-            Uint8 titleR = win->titleBarColor.r;
-            Uint8 titleG = win->titleBarColor.g;
-            Uint8 titleB = win->titleBarColor.b;
-            Uint8 titleA = win->titleBarColor.a * win->opacity;
-            Uint8 bodyA = win->backgroundColor.a * win->opacity;
-            Uint8 bodyR = win->backgroundColor.r;
-            Uint8 bodyG = win->backgroundColor.g;
-            Uint8 bodyB = win->backgroundColor.b;
-
+            // No texture - render traditional window with title bar and body directly
             if (radius > 0) {
-                // Draw title bar with top-rounded corners
-                // First draw the body color as base
+                // Draw full rounded window body first
                 SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                drawRoundedRectangle(x, y, w, h, radius);
 
-                // Title bar center
-                SDL_FRect titleCenter = {x + radius, y, w - 2 * radius, titleHeight};
-                SDL_RenderFillRect(renderer, &titleCenter);
-
-                // Title bar sides
-                SDL_FRect titleLeft = {x, y + radius, radius, titleHeight - radius};
-                SDL_RenderFillRect(renderer, &titleLeft);
-
-                SDL_FRect titleRight = {x + w - radius, y + radius, radius, titleHeight - radius};
-                SDL_RenderFillRect(renderer, &titleRight);
-
-                // Top corners
-                drawFilledCircleQuarter(x + radius, y + radius, radius, 2); // Top-left
-                drawFilledCircleQuarter(x + w - radius, y + radius, radius, 1); // Top-right
-
-                // Then overlay the title bar color with alpha blending
+                // Overlay title area without disturbing the rounded corners.
+                // We draw the center title rect (avoids the corner areas) and
+                // small side rects that start below the corner arc.
                 if (titleA > 0) {
                     SDL_SetRenderDrawColor(renderer, titleR, titleG, titleB, titleA);
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-                    // Title bar center overlay
-                    SDL_RenderFillRect(renderer, &titleCenter);
-
-                    // Title bar sides overlay
-                    SDL_RenderFillRect(renderer, &titleLeft);
-                    SDL_RenderFillRect(renderer, &titleRight);
-
-                    // Top corners overlay
-                    drawFilledCircleQuarter(x + radius, y + radius, radius, 2);
-                    drawFilledCircleQuarter(x + w - radius, y + radius, radius, 1);
+                    // Draw the title bar using the same rasterization method as
+                    // the window body, but only with the top corners rounded. This
+                    // produces identical corner shapes and avoids seams.
+                    drawRoundedTopRectangle(x, y, w, titleHeight, radius);
                 }
-
-                // Draw body with bottom-rounded corners
-                SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
-
-                // Body center
-                SDL_FRect bodyCenter = {x + radius, y + titleHeight, w - 2 * radius, h - titleHeight};
-                SDL_RenderFillRect(renderer, &bodyCenter);
-
-                // Body sides
-                SDL_FRect bodyLeft = {x, y + titleHeight, radius, h - titleHeight - radius};
-                SDL_RenderFillRect(renderer, &bodyLeft);
-
-                SDL_FRect bodyRight = {x + w - radius, y + titleHeight, radius, h - titleHeight - radius};
-                SDL_RenderFillRect(renderer, &bodyRight);
-
-                // Bottom corners
-                drawFilledCircleQuarter(x + radius, y + h - radius, radius, 3); // Bottom-left
-                drawFilledCircleQuarter(x + w - radius, y + h - radius, radius, 4); // Bottom-right
 
             } else {
                 // No rounding - draw simple rectangles
-                // First draw body color as base for title bar
                 SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
                 SDL_FRect titleBar = {x, y, w, titleHeight};
                 SDL_RenderFillRect(renderer, &titleBar);
 
-                // Then overlay title bar color with alpha blending
                 if (titleA > 0) {
                     SDL_SetRenderDrawColor(renderer, titleR, titleG, titleB, titleA);
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
                     SDL_RenderFillRect(renderer, &titleBar);
                 }
 
-                // Draw body
                 SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
                 SDL_FRect body = {x, y + titleHeight, w, h - titleHeight};
                 SDL_RenderFillRect(renderer, &body);
             }
-
-            // Border - only when no texture
-            SDL_SetRenderDrawColor(renderer, std::min(255, bodyR + 55), std::min(255, bodyG + 50), std::min(255, bodyB + 75), 255);
-            drawRoundedRectangleBorder(x, y, w, h, radius);
         }
 
-        // Close button
-        if (win->closeable) {
-            float closeX = x + w - Window::CLOSE_BUTTON_SIZE - Window::CLOSE_BUTTON_MARGIN * 2;
-            float closeY = y + (titleHeight - Window::CLOSE_BUTTON_SIZE) / 2;
-
-            // Check if using custom texture
-            SDL_Texture* closeTexture = nullptr;
-            if (!win->closeSrc.empty()) {
-                closeTexture = textureManager->loadTexture(win->closeSrc);
-            }
-
-            if (closeTexture) {
-                // Render custom close button texture
-                SDL_FRect closeBtn = {closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE};
-                SDL_RenderTexture(renderer, closeTexture, nullptr, &closeBtn);
-            } else {
-                // Default close button rendering
-                // Button background
-                SDL_SetRenderDrawColor(renderer, 200, 60, 60, 255);
-                SDL_FRect closeBtn = {closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE};
-                SDL_RenderFillRect(renderer, &closeBtn);
-
-                // X symbol
-                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                drawCloseButton(closeX, closeY, Window::CLOSE_BUTTON_SIZE);
-            }
+        // --- Debug dump: capture corner pixels for problematic windows (one-shot) ---
+        // This is a diagnostic aid; it will write BMPs into the project root when
+        // the Docking Demo or any window whose title contains "Docked Bottom" is drawn.
+        // It runs only once per name to avoid spamming disk.
+        static bool dumpedDocking = false;
+        static bool dumpedChild = false;
+        if (!dumpedDocking && win->title.find("Docking Demo") != std::string::npos) {
+            dumpWindowBodyToAlphaBMP(x, y, std::min(w, 200.0f), std::min(h, 80.0f), radius, bodyR, bodyG, bodyB, bodyA, "corner_dump_docking.bmp");
+            dumpedDocking = true;
+            // Also save the full framebuffer so we can see overlay compositing
+            dumpFramebufferToBMP("corner_dump_docking_full.bmp");
+        }
+        if (!dumpedChild && win->title.find("Docked Bottom") != std::string::npos) {
+            dumpWindowBodyToAlphaBMP(x, y, std::min(w, 200.0f), std::min(h, 120.0f), radius, bodyR, bodyG, bodyB, bodyA, "corner_dump_child.bmp");
+            dumpedChild = true;
         }
 
-        // Title text rendering (if title present and a non-texture window)
-        if (!win->title.empty() && !hasTexture) {
-            // Choose a default font size that fits title bar height
-            int fontSize = static_cast<int>(Window::TITLE_BAR_HEIGHT * 0.6f);
-            TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
-            if (font) {
-                SDL_Color textColor = {255,255,255, static_cast<Uint8>(255 * win->opacity)};
+        // NOTE: close button and title text are drawn after children so they
+        // always appear above content. We'll render the window body (title bar
+        // background + window body) into a temporary RGBA texture to preserve
+        // corner alpha and seams, then composite it back. Close button and
+        // title text will be rendered below in the overlay section.
 
-                // Compute available width for title. Reserve space for close button if present,
-                // and some padding on left and right.
-                float leftPadding = 8.0f;
-                float rightPadding = 8.0f;
-                float reservedForClose = win->closeable ? (Window::CLOSE_BUTTON_SIZE + Window::CLOSE_BUTTON_MARGIN * 2) : 0.0f;
-                float availableW = w - leftPadding - rightPadding - reservedForClose;
+            // Before rendering children, compute measured content extents and clamp scroll offsets
+            // This prevents overscroll where children are incorrectly culled because scroll was larger than max
+            {
+                float safeLeftTmp = win->getSafeContentLeft();
+                float safeTopTmp = win->getSafeContentTop();
+                float safeWTmp = win->getSafeContentRight() - win->getSafeContentLeft();
+                float safeHTmp = win->getSafeContentBottom() - win->getSafeContentTop();
+                float contentW = 0.0f, contentH = 0.0f;
+                for (UIElement* c : win->content) {
+                    if (!c) continue;
+                    float measuredW = c->width, measuredH = c->height;
+                    measureElementRenderedSize(c, safeWTmp, safeHTmp, measuredW, measuredH);
+                    contentW = std::max(contentW, c->x + measuredW);
+                    contentH = std::max(contentH, c->y + measuredH);
+                }
+                if (win->id == "winC_scroll_v") {
+                    std::cerr << "[DIAG][winC] measured contentH=" << contentH << " safeH=" << safeHTmp << " scrollY=" << win->scrollY << std::endl;
+                    for (UIElement* c : win->content) {
+                        if (!c) continue;
+                        float mW=c->width, mH=c->height; measureElementRenderedSize(c, safeWTmp, safeHTmp, mW, mH);
+                        float crx = c->x - win->scrollX; float cry = c->y - win->scrollY;
+                        bool intr = !( (crx + mW) <= (safeLeftTmp + 0.5f) || crx >= (safeLeftTmp + safeWTmp - 0.5f) || (cry + mH) <= (safeTopTmp + 0.5f) || cry >= (safeTopTmp + safeHTmp - 0.5f));
+                        std::cerr << "[DIAG][winC] child y="<<c->y<<" mH="<<mH<<" childRectY="<<cry<<" intersects="<<intr<<std::endl;
+                    }
+                }
+                // Renderer must not alter the window's stored scroll offsets.
+                // Compute clamped values locally when rendering, leaving the
+                // authoritative scroll state (managed by UIManager) untouched.
+            }
 
-                // If available width is too small, skip text
-                if (availableW > 8.0f) {
-                    // Quick check: if the whole title fits, render it directly
-                    int wholeW = 0, wholeH = 0;
-                    SDL_Texture* wholeTex = fontManager->getTextTexture(renderer, font, win->title, textColor, wholeW, wholeH);
-                    if (wholeTex && static_cast<float>(wholeW) <= availableW) {
-                        float tx = x + leftPadding;
-                        float ty = y + (Window::TITLE_BAR_HEIGHT - wholeH) / 2.0f;
-                        SDL_FRect dst = {tx, ty, static_cast<float>(wholeW), static_cast<float>(wholeH)};
-                        SDL_SetTextureBlendMode(wholeTex, SDL_BLENDMODE_BLEND);
-                        SDL_SetTextureAlphaMod(wholeTex, static_cast<Uint8>(255 * win->opacity));
-                        SDL_RenderTexture(renderer, wholeTex, nullptr, &dst);
-                    } else {
-                        // Need to truncate; binary-search the longest prefix that fits when appended with ellipsis
-                        std::string title = win->title;
-                        std::string ell = "...";
-                        int low = 0, high = (int)title.size();
-                        std::string best = "";
-                        while (low <= high) {
-                            int mid = (low + high) / 2;
-                            std::string candidate = title.substr(0, mid) + ell;
-                            int cw = 0, ch = 0;
-                            SDL_Texture* candTex = fontManager->getTextTexture(renderer, font, candidate, textColor, cw, ch);
-                            if (candTex && static_cast<float>(cw) <= availableW) {
-                                best = candidate;
-                                low = mid + 1;
-                            } else {
-                                high = mid - 1;
-                            }
-                        }
-                        if (best.empty()) {
-                            // Nothing fits - try single-character ellipsis fallback
-                            best = ell;
-                        }
-                        int bw = 0, bh = 0;
-                        SDL_Texture* bestTex = fontManager->getTextTexture(renderer, font, best, textColor, bw, bh);
-                        if (bestTex) {
+            // render content clipped to the window's safe content area using integer clip rects
+            // Render children only if they intersect the window's safe content area (coarse clipping)
+            SDL_FRect safeAreaF;
+            safeAreaF.x = win->getSafeContentLeft();
+            safeAreaF.y = win->getSafeContentTop();
+            safeAreaF.w = win->getSafeContentRight() - win->getSafeContentLeft();
+            safeAreaF.h = win->getSafeContentBottom() - win->getSafeContentTop();
+
+            // Convert to integer SDL_Rect for clipping (floor/ceil to be safe)
+            SDL_Rect clipRect;
+            clipRect.x = static_cast<int>(floorf(safeAreaF.x));
+            clipRect.y = static_cast<int>(floorf(safeAreaF.y));
+            clipRect.w = static_cast<int>(ceilf(safeAreaF.w));
+            clipRect.h = static_cast<int>(ceilf(safeAreaF.h));
+
+            bool didClip = false;
+            if (clipRect.w > 0 && clipRect.h > 0) {
+                SDL_SetRenderClipRect(renderer, &clipRect);
+                didClip = true;
+            }
+
+            for (UIElement* child : win->content) {
+                if (!child) continue;
+                float measuredW = child->width, measuredH = child->height;
+                measureElementRenderedSize(child, safeAreaF.w, safeAreaF.h, measuredW, measuredH);
+                SDL_FRect childRect = { child->x - win->scrollX, child->y - win->scrollY, measuredW, measuredH };
+                // Allow a 1-pixel tolerance to avoid accidental exclusion due to float->int rounding
+                const float EPS = 2.0f;
+                bool intersects = !((childRect.x + childRect.w) <= (safeAreaF.x + EPS) ||
+                                    (childRect.x) >= (safeAreaF.x + safeAreaF.w - EPS) ||
+                                    (childRect.y + childRect.h) <= (safeAreaF.y + EPS) ||
+                                    (childRect.y) >= (safeAreaF.y + safeAreaF.h - EPS));
+                if (win->id == "panelB_nowrap" || win->id == "winD_scroll_both") {
+                    std::cerr << "[DIAG][window] id=" << win->id
+                              << " scrollX=" << win->scrollX << " scrollY=" << win->scrollY
+                              << " safeArea=(" << safeAreaF.x << "," << safeAreaF.y << "," << safeAreaF.w << "," << safeAreaF.h << ")"
+                              << " child=(x=" << child->x << ",y=" << child->y << ",w=" << measuredW << ",h=" << measuredH << ")"
+                              << " childRect=(x=" << childRect.x << ",y=" << childRect.y << ",w=" << childRect.w << ",h=" << childRect.h << ")"
+                              << " intersects=" << intersects << std::endl;
+                }
+                if (intersects) {
+                    float prevX = child->x;
+                    float prevY = child->y;
+                    child->x = prevX - win->scrollX;
+                    child->y = prevY - win->scrollY;
+                    renderElement(child);
+                    child->x = prevX;
+                    child->y = prevY;
+                }
+            }
+
+            if (didClip) SDL_SetRenderClipRect(renderer, nullptr);
+
+            // Draw simple scrollbars for window if enabled (per-axis fade timers)
+            if (!win->scrollable.empty()) {
+                float tY = std::max(0.0f, std::min(win->scrollBarFadeTimerY / win->scrollBarFadeDuration, 1.0f));
+                float tX = std::max(0.0f, std::min(win->scrollBarFadeTimerX / win->scrollBarFadeDuration, 1.0f));
+                Uint8 alphaY = static_cast<Uint8>(255 * tY);
+                Uint8 alphaX = static_cast<Uint8>(255 * tX);
+                // Vertical scrollbar
+                if (win->scrollable == "vertical" || win->scrollable == "both") {
+                    float safeLeft = win->getSafeContentLeft();
+                    float safeTop = win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
+                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    // scrollbar width
+                    float sbw = 8.0f;
+                    float sbx = safeLeft + safeW - sbw - 4.0f;
+                    float sby = safeTop + 4.0f;
+                    float sbh = safeH - 8.0f;
+                    SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<Uint8>(alphaY * 0.35f));
+                    SDL_FRect bg = {sbx, sby, sbw, sbh};
+                    SDL_RenderFillRect(renderer, &bg);
+                    // thumb size proportional to content vs viewport height
+                    float contentH = 0.0f;
+                    for (UIElement* c : win->content) {
+                        float measuredW = c->width, measuredH = c->height;
+                        measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
+                        contentH = std::max(contentH, c->y + measuredH);
+                    }
+                    float viewportH = safeH;
+                    // Thumb size should be computed relative to the track height (sbh)
+                    // so that the mapping scroll->thumbPos maps scroll=max to track end.
+                    float thumbH = std::max(16.0f, (contentH > 0.0f) ? sbh * (viewportH / contentH) : sbh);
+                    float maxScroll = std::max(0.0f, contentH - viewportH);
+                    // Clamp scrollY to measured content extents
+                    // Do not mutate win->scrollY here. Renderer will use a
+                    // local clamped value for mapping to thumb position.
+                    // Use a clamped scroll-to-rel calculation and ensure that when
+                    // the scroll is at the measured maximum the thumb is flush with
+                    // the track end. This only affects the visual mapping and does
+                    // not change the stored scroll value on the window.
+                    float clampedScroll = std::max(0.0f, std::min(win->scrollY, maxScroll));
+                    float rel = (maxScroll > 0.0f) ? (clampedScroll / maxScroll) : 0.0f;
+                    // If we're very near the measured max scroll (within 1px), treat
+                    // it as the end so small measurement differences don't leave the
+                    // thumb visually short of the track end.
+                    if (maxScroll > 0.0f && (maxScroll - clampedScroll) <= 1.0f) {
+                        rel = 1.0f;
+                    }
+                    float thumbY = sby + rel * (sbh - thumbH);
+                    // Diagnostic snapping notification if the computed thumbY differs
+                    // noticeably from the exact expected end when we're at/near max.
+                    float expectedEnd = sby + (sbh - thumbH);
+                    const float SNAP_EPS = 0.5f;
+                    if (rel >= 1.0f && std::fabs(thumbY - expectedEnd) > SNAP_EPS) {
+                        std::cerr << "[DIAG][UIRenderer] snapping thumbY for window id=" << win->id
+                                  << " from=" << thumbY << " to=" << expectedEnd << " (clampedScroll=" << clampedScroll << ")" << std::endl;
+                        thumbY = expectedEnd;
+                    }
+                    // Diagnostic: report thumb mapping values
+                    std::cerr << "[DIAG][UIRenderer] window id=" << win->id << " axis=Y contentH=" << contentH << " viewportH=" << viewportH
+                              << " sb_trackY=" << sby << " sb_trackH=" << sbh << " thumbH=" << thumbH << " rel=" << rel
+                              << " thumbY=" << thumbY << " expectedEnd=" << (sby + (sbh - thumbH)) << std::endl;
+                    SDL_SetRenderDrawColor(renderer, 200, 200, 200, alphaY);
+                    SDL_FRect thumb = {sbx + 1.0f, thumbY, sbw - 2.0f, thumbH};
+                    SDL_RenderFillRect(renderer, &thumb);
+                }
+                // Horizontal scrollbar
+                if (win->scrollable == "horizontal" || win->scrollable == "both") {
+                    float safeLeft = win->getSafeContentLeft();
+                    float safeTop = win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
+                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    float sbh = 8.0f;
+                    float sbx = safeLeft + 4.0f;
+                    float sby = safeTop + safeH - sbh - 4.0f;
+                    float sbw = safeW - 8.0f;
+                    SDL_SetRenderDrawColor(renderer, 0, 0, 0, static_cast<Uint8>(alphaX * 0.35f));
+                    SDL_FRect bg = {sbx, sby, sbw, sbh};
+                    SDL_RenderFillRect(renderer, &bg);
+                    // compute content width
+                    float contentW = 0.0f;
+                    for (UIElement* c : win->content) {
+                        float measuredW = c->width, measuredH = c->height;
+                        measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
+                        contentW = std::max(contentW, c->x + measuredW);
+                    }
+                    float viewportW = safeW;
+                    // Thumb width computed relative to track width (sbw)
+                    float thumbW = std::max(16.0f, (contentW > 0.0f) ? sbw * (viewportW / contentW) : sbw);
+                    float maxScroll = std::max(0.0f, contentW - viewportW);
+                    // Do not mutate win->scrollX here. Renderer will use a
+                    // local clamped value for mapping to thumb position.
+                    // Visual-only mapping fix (horizontal): compute rel from a
+                    // clamped scroll and snap to track end when at max to avoid
+                    // visual mismatch without changing scroll semantics.
+                    float clampedScrollX = std::max(0.0f, std::min(win->scrollX, maxScroll));
+                    float rel = (maxScroll > 0.0f) ? (clampedScrollX / maxScroll) : 0.0f;
+                    if (maxScroll > 0.0f && (maxScroll - clampedScrollX) <= 1.0f) {
+                        rel = 1.0f;
+                    }
+                    float thumbX = sbx + rel * (sbw - thumbW);
+                    float expectedEndX = sbx + (sbw - thumbW);
+                    const float SNAP_EPS_X = 0.5f;
+                    if (rel >= 1.0f && std::fabs(thumbX - expectedEndX) > SNAP_EPS_X) {
+                        std::cerr << "[DIAG][UIRenderer] snapping thumbX for window id=" << win->id
+                                  << " from=" << thumbX << " to=" << expectedEndX << " (clampedScrollX=" << clampedScrollX << ")" << std::endl;
+                        thumbX = expectedEndX;
+                    }
+                    // Diagnostic: report thumb mapping values
+                    std::cerr << "[DIAG][UIRenderer] window id=" << win->id << " axis=X contentW=" << contentW << " viewportW=" << viewportW
+                              << " sb_trackX=" << sbx << " sb_trackW=" << sbw << " thumbW=" << thumbW << " rel=" << rel
+                              << " thumbX=" << thumbX << " expectedEnd=" << (sbx + (sbw - thumbW)) << std::endl;
+                    SDL_SetRenderDrawColor(renderer, 200, 200, 200, alphaX);
+                    SDL_FRect thumb = {thumbX, sby + 1.0f, thumbW, sbh - 2.0f};
+                    SDL_RenderFillRect(renderer, &thumb);
+                }
+            }
+
+            
+
+            // Draw border outside the window bounds so it doesn't reduce safe content.
+            if (win->borderWidth > 0.0f) {
+                uint8_t brc = win->borderColor.r;
+                uint8_t bgc = win->borderColor.g;
+                uint8_t bbc = win->borderColor.b;
+                uint8_t bac = static_cast<Uint8>(win->borderColor.a * win->opacity);
+                SDL_SetRenderDrawColor(renderer, brc, bgc, bbc, bac);
+                float bw = win->borderWidth;
+                drawRoundedRectangleBorder(x - bw, y - bw, w + 2*bw, h + 2*bw, radius + bw);
+            }
+
+            // Close button (draw after children so it overlays content)
+            if (win->closeable) {
+                float closeX = x + w - Window::CLOSE_BUTTON_SIZE - Window::CLOSE_BUTTON_MARGIN * 2;
+                float closeY = y + (titleHeight - Window::CLOSE_BUTTON_SIZE) / 2;
+
+                // Check if using custom texture
+                SDL_Texture* closeTexture = nullptr;
+                if (!win->closeSrc.empty()) {
+                    closeTexture = textureManager->loadTexture(win->closeSrc);
+                }
+
+                if (closeTexture) {
+                    // Render custom close button texture
+                    renderTexturedRectangle(closeTexture, closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE, 255,255,255,255,0, 0.0f);
+                } else {
+                    // Default close button rendering
+                    // Button background
+                    SDL_SetRenderDrawColor(renderer, 200, 60, 60, 255);
+                    SDL_FRect closeBtn = {closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE};
+                    SDL_RenderFillRect(renderer, &closeBtn);
+
+                    // X symbol
+                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                    drawCloseButton(closeX, closeY, Window::CLOSE_BUTTON_SIZE);
+                }
+            }
+
+            // Title text rendering (if title present and a non-texture window). Draw after children
+            if (!win->title.empty() && !hasTexture) {
+                int fontSize = static_cast<int>(Window::TITLE_BAR_HEIGHT * 0.6f);
+                TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                if (font) {
+                    SDL_Color textColor = { win->textColor.r, win->textColor.g, win->textColor.b, static_cast<Uint8>(win->textColor.a * win->opacity) };
+                    float leftPadding = 8.0f;
+                    float rightPadding = 8.0f;
+                    float reservedForClose = win->closeable ? (Window::CLOSE_BUTTON_SIZE + Window::CLOSE_BUTTON_MARGIN * 2) : 0.0f;
+                    float availableW = w - leftPadding - rightPadding - reservedForClose;
+
+                    if (availableW > 8.0f) {
+                        int wholeW = 0, wholeH = 0;
+                        SDL_Texture* wholeTex = fontManager->getTextTexture(renderer, font, win->title, textColor, wholeW, wholeH);
+                        if (wholeTex && static_cast<float>(wholeW) <= availableW) {
                             float tx = x + leftPadding;
-                            float ty = y + (Window::TITLE_BAR_HEIGHT - bh) / 2.0f;
-                            SDL_FRect dst = {tx, ty, static_cast<float>(bw), static_cast<float>(bh)};
-                            SDL_SetTextureBlendMode(bestTex, SDL_BLENDMODE_BLEND);
-                            SDL_SetTextureAlphaMod(bestTex, static_cast<Uint8>(255 * win->opacity));
-                            SDL_RenderTexture(renderer, bestTex, nullptr, &dst);
+                            float ty = y + (Window::TITLE_BAR_HEIGHT - wholeH) / 2.0f;
+                            SDL_FRect dst = {tx, ty, static_cast<float>(wholeW), static_cast<float>(wholeH)};
+                            SDL_SetTextureBlendMode(wholeTex, SDL_BLENDMODE_BLEND);
+                            SDL_SetTextureAlphaMod(wholeTex, static_cast<Uint8>(255 * win->opacity));
+                            renderTexturedRectangle(wholeTex, dst.x, dst.y, dst.w, dst.h, 255,255,255,static_cast<Uint8>(255 * win->opacity), 0, 0.0f);
+                        } else {
+                            std::string title = win->title;
+                            std::string ell = "...";
+                            int low = 0, high = (int)title.size();
+                            std::string best = "";
+                            while (low <= high) {
+                                int mid = (low + high) / 2;
+                                std::string candidate = title.substr(0, mid) + ell;
+                                int cw = 0, ch = 0;
+                                SDL_Texture* candTex = fontManager->getTextTexture(renderer, font, candidate, textColor, cw, ch);
+                                if (candTex && static_cast<float>(cw) <= availableW) {
+                                    best = candidate;
+                                    low = mid + 1;
+                                } else {
+                                    high = mid - 1;
+                                }
+                            }
+                            if (best.empty()) {
+                                best = ell;
+                            }
+                            int bw = 0, bh = 0;
+                            SDL_Texture* bestTex = fontManager->getTextTexture(renderer, font, best, textColor, bw, bh);
+                            if (bestTex) {
+                                float tx = x + leftPadding;
+                                float ty = y + (Window::TITLE_BAR_HEIGHT - bh) / 2.0f;
+                                SDL_FRect dst = {tx, ty, static_cast<float>(bw), static_cast<float>(bh)};
+                                SDL_SetTextureBlendMode(bestTex, SDL_BLENDMODE_BLEND);
+                                SDL_SetTextureAlphaMod(bestTex, static_cast<Uint8>(255 * win->opacity));
+                                renderTexturedRectangle(bestTex, dst.x, dst.y, dst.w, dst.h, 255,255,255,static_cast<Uint8>(255 * win->opacity), 0, 0.0f);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Resize handle indicator (only visible when hovering)
-        if (win->resizable && win->isHovered) {
-            drawResizeHandle(x, y, w, h);
-        }
+            // After drawing border and chrome, draw overlay chrome elements such as resize handle and drag indicator
+            // so they appear above any child content and border.
+            if (win->resizable && win->isHovered) {
+                drawResizeHandle(x, y, w, h);
+            }
 
-        // Drag indicator
-        if (win->isBeingDragged) {
-            SDL_SetRenderDrawColor(renderer, 255, 255, 0, 128);
-            drawRoundedRectangleBorder(x + 5, y + 5, w - 10, h - 10,
-                                      radius > 5 ? radius - 5 : 0);
-        }
-            // render content clipped to the window's safe content area using integer clip rects
-            // Render children only if they intersect the window's safe content area (coarse clipping)
-            SDL_FRect safeArea;
-            safeArea.x = win->getSafeContentLeft();
-            safeArea.y = win->getSafeContentTop();
-            safeArea.w = win->getSafeContentRight() - win->getSafeContentLeft();
-            safeArea.h = win->getSafeContentBottom() - win->getSafeContentTop();
-
-            for (UIElement* child : win->content) {
-                if (!child) continue;
-                SDL_FRect childRect = { child->x, child->y, child->width, child->height };
-                bool intersects = !(childRect.x + childRect.w <= safeArea.x ||
-                                    childRect.x >= safeArea.x + safeArea.w ||
-                                    childRect.y + childRect.h <= safeArea.y ||
-                                    childRect.y >= safeArea.y + safeArea.h);
-                if (intersects) {
-                    renderElement(child);
-                }
+            if (win->isBeingDragged) {
+                SDL_SetRenderDrawColor(renderer, 255, 255, 0, 128);
+                drawRoundedRectangleBorder(x + 5, y + 5, w - 10, h - 10,
+                                          radius > 5 ? radius - 5 : 0);
             }
     }
 
@@ -579,7 +992,116 @@ private:
         } else if (Panel* p = dynamic_cast<Panel*>(element)) {
             renderPanel(p);
         } else {
-            // Unknown element type: no-op for now
+            // Button rendering
+            if (BangUI::impl::ButtonImpl* b = dynamic_cast<BangUI::impl::ButtonImpl*>(element)) {
+                if (!b->visible) return;
+                float x = b->x;
+                float y = b->y;
+                float w = b->width;
+                float h = b->height;
+
+                // Background
+                Uint8 br = b->backgroundColor.r;
+                Uint8 bg = b->backgroundColor.g;
+                Uint8 bb = b->backgroundColor.b;
+                Uint8 ba = static_cast<Uint8>(b->backgroundColor.a * b->opacity);
+                SDL_SetRenderDrawColor(renderer, br, bg, bb, ba);
+                drawRoundedRectangle(x, y, w, h, b->cornerRadius);
+
+                // Border
+                SDL_SetRenderDrawColor(renderer, b->borderColor.r, b->borderColor.g, b->borderColor.b, b->borderColor.a);
+                drawRoundedRectangleBorder(x, y, w, h, b->cornerRadius);
+
+                // Label centered
+                std::string label = b->label;
+                if (!label.empty()) {
+                    int fontSize = 14;
+                    TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                    if (font) {
+                        SDL_Color textColor = { b->textColor.r, b->textColor.g, b->textColor.b, static_cast<Uint8>(b->textColor.a * b->opacity) };
+                        int tw = 0, th = 0;
+                        SDL_Texture* tex = fontManager->getTextTexture(renderer, font, label, textColor, tw, th);
+                        if (tex) {
+                            float tx = x + (w - tw) / 2.0f;
+                            float ty = y + (h - th) / 2.0f;
+                            SDL_FRect dst = {tx, ty, static_cast<float>(tw), static_cast<float>(th)};
+                            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+                            SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(255 * b->opacity));
+                            SDL_RenderTexture(renderer, tex, nullptr, &dst);
+                        }
+                    }
+                }
+                return;
+            }
+            // Label rendering
+            if (BangUI::impl::LabelImpl* l = dynamic_cast<BangUI::impl::LabelImpl*>(element)) {
+                if (!l->visible) return;
+                int fontSize = l->fontSize > 0 ? l->fontSize : 14;
+                TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                if (!font) return;
+                SDL_Color textColor = { l->textColor.r, l->textColor.g, l->textColor.b, static_cast<Uint8>(l->textColor.a * l->opacity) };
+
+                // If wordWrap, break into lines fitting element width
+                if (l->wordWrap) {
+                    float maxW = l->getSafeContentWidth();
+                    if (maxW <= 0) maxW = l->width - 4.0f;
+                    std::string text = l->text.empty() ? l->properties["text"] : l->text;
+                    // naive word wrapping
+                    std::vector<std::string> lines;
+                    std::string current;
+                    std::istringstream iss(text);
+                    std::string word;
+                    while (iss >> word) {
+                        std::string cand = current.empty() ? word : current + " " + word;
+                        int cw = 0, ch = 0;
+                        SDL_Texture* tmp = fontManager->getTextTexture(renderer, font, cand, textColor, cw, ch);
+                        if (tmp && static_cast<float>(cw) <= maxW) {
+                            current = cand;
+                        } else {
+                            if (!current.empty()) lines.push_back(current);
+                            current = word;
+                        }
+                    }
+                    if (!current.empty()) lines.push_back(current);
+
+                    int lineH = 0;
+                    // measure single line height
+                    { int tw=0, th=0; SDL_Texture* t = fontManager->getTextTexture(renderer, font, "Ay", textColor, tw, th); if (t) lineH = th; }
+                    if (lineH <= 0) lineH = fontSize + 2;
+                    float startX = l->getSafeContentLeft();
+                    float startY = l->getSafeContentTop();
+                    for (size_t i=0;i<lines.size();++i) {
+                        int tw=0, th=0;
+                        SDL_Texture* tex = fontManager->getTextTexture(renderer, font, lines[i], textColor, tw, th);
+                        if (!tex) continue;
+                        float tx = startX;
+                        float ty = startY + i * lineH - (l->parent && (Panel* )nullptr ? 0.0f : 0.0f);
+                        SDL_FRect dst = {tx, ty, static_cast<float>(tw), static_cast<float>(th)};
+                        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+                        SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(255 * l->opacity));
+                        SDL_RenderTexture(renderer, tex, nullptr, &dst);
+                    }
+                } else {
+                    std::string text = l->text.empty() ? l->properties["text"] : l->text;
+                    // If text contains newlines, render each line stacked
+                    std::istringstream iss(text);
+                    std::string line;
+                    float x = l->getSafeContentLeft();
+                    float y = l->getSafeContentTop();
+                    int lineIndex = 0;
+                    while (std::getline(iss, line)) {
+                        int tw=0, th=0;
+                        SDL_Texture* tex = fontManager->getTextTexture(renderer, font, line, textColor, tw, th);
+                        if (!tex) continue;
+                        SDL_FRect dst = {x, y + lineIndex * (th + 2), static_cast<float>(tw), static_cast<float>(th)};
+                        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+                        SDL_SetTextureAlphaMod(tex, static_cast<Uint8>(255 * l->opacity));
+                        SDL_RenderTexture(renderer, tex, nullptr, &dst);
+                        ++lineIndex;
+                    }
+                }
+                return;
+            }
         }
     }
     // Draw close button X
@@ -624,6 +1146,62 @@ private:
         for (int i = 0; i < 3; i++) {
             float offset = 4.0f + i * 4.0f;
             SDL_RenderLine(renderer, x2 - offset, y2 - 2, x2 - 2, y2 - offset);
+        }
+    }
+
+    // Measure an element's rendered size (width/height) taking into account
+    // label wrapping and font measurement. Falls back to the element's stored
+    // width/height when no special measurement is needed.
+    void measureElementRenderedSizeImpl(UIElement* element, float maxW, float maxH, float& outW, float& outH) {
+        outW = element->width;
+        outH = element->height;
+        if (!element) return;
+        if (BangUI::impl::LabelImpl* l = dynamic_cast<BangUI::impl::LabelImpl*>(element)) {
+            int fontSize = l->fontSize > 0 ? l->fontSize : 14;
+            TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+            if (!font) return;
+            SDL_Color textColor = {255,255,255,255};
+            std::string text = l->text.empty() ? l->properties["text"] : l->text;
+            if (l->wordWrap) {
+                float availableW = maxW;
+                if (availableW <= 0) availableW = element->width > 0 ? element->width : 200.0f;
+                std::istringstream iss(text);
+                std::string word;
+                std::string current;
+                std::vector<std::string> lines;
+                while (iss >> word) {
+                    std::string cand = current.empty() ? word : current + " " + word;
+                    int cw = 0, ch = 0;
+                    SDL_Texture* tmp = fontManager->getTextTexture(renderer, font, cand, textColor, cw, ch);
+                    if (tmp && static_cast<float>(cw) <= availableW) {
+                        current = cand;
+                    } else {
+                        if (!current.empty()) lines.push_back(current);
+                        current = word;
+                    }
+                }
+                if (!current.empty()) lines.push_back(current);
+                int lineH = 0; { int tw=0, th=0; SDL_Texture* t = fontManager->getTextTexture(renderer, font, "Ay", textColor, tw, th); if (t) lineH = th; }
+                if (lineH <= 0) lineH = fontSize + 2;
+                int maxLineW = 0; for (auto &ln : lines) { int tw=0, th=0; SDL_Texture* tx = fontManager->getTextTexture(renderer, font, ln, textColor, tw, th); if (tx) maxLineW = std::max(maxLineW, tw); }
+                outW = static_cast<float>(maxLineW);
+                outH = static_cast<float>(lines.size() * lineH);
+            } else {
+                // multiline via newlines
+                std::istringstream iss(text);
+                std::string line;
+                int totalH = 0;
+                int maxLineW = 0;
+                while (std::getline(iss, line)) {
+                    int tw=0, th=0;
+                    SDL_Texture* tex = fontManager->getTextTexture(renderer, font, line, textColor, tw, th);
+                    if (!tex) continue;
+                    maxLineW = std::max(maxLineW, tw);
+                    totalH += th + 2;
+                }
+                outW = static_cast<float>(maxLineW);
+                outH = static_cast<float>(totalH);
+            }
         }
     }
 };

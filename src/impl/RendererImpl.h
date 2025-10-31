@@ -8,6 +8,7 @@ class RendererImpl : public API::IRenderer {
 public:
     RendererImpl(SDL_Renderer* sdlRenderer)
         : uiRenderer(sdlRenderer) {
+        diegeticMapper = nullptr;
     }
 
     ~RendererImpl() override = default;
@@ -29,8 +30,16 @@ public:
         uiRenderer.renderWindow(reinterpret_cast<const Window*>(window));
     }
 
+    void measureElementRenderedSize(API::UIElement* element, float maxW, float maxH, float& outW, float& outH) override {
+        // forward to the concrete renderer implementation
+        uiRenderer.measureElementRenderedSize(element, maxW, maxH, outW, outH);
+    }
+
+    void setDiegeticMapper(DiegeticMapperFn fn) override;
+
 private:
     UIRenderer uiRenderer;
+    DiegeticMapperFn diegeticMapper;
 };
 
 } // namespace BangUI::Impl

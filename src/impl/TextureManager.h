@@ -5,6 +5,7 @@
 #include <string>
 #include <map>
 #include <iostream>
+#include <filesystem>
 
 // TextureManager: Handles loading, caching, and cleanup of SDL textures
 // Uses RGBA8 format for proper alpha channel support
@@ -52,8 +53,19 @@ public:
             return it->second;
         }
 
-        // Load image as SDL_Surface
+        // Load image as SDL_Surface. Try original path first, then a fallback via current working directory
         SDL_Surface* loadedSurface = IMG_Load(path.c_str());
+        if (!loadedSurface) {
+            try {
+                std::filesystem::path p(path);
+                if (p.is_relative()) {
+                    std::filesystem::path alt = std::filesystem::current_path() / p;
+                    std::string altStr = alt.string();
+                    loadedSurface = IMG_Load(altStr.c_str());
+                    if (loadedSurface) std::cout << "Loaded texture via fallback path: " << altStr << std::endl;
+                }
+            } catch (...) {}
+        }
         if (!loadedSurface) {
             std::cerr << "Unable to load image " << path << "! SDL_image Error: " << SDL_GetError() << std::endl;
             return nullptr;
@@ -119,8 +131,19 @@ public:
             return it->second;
         }
 
-        // Load image as SDL_Surface
+        // Load image as SDL_Surface. Try original path first, then a fallback via current working directory
         SDL_Surface* loadedSurface = IMG_Load(path.c_str());
+        if (!loadedSurface) {
+            try {
+                std::filesystem::path p(path);
+                if (p.is_relative()) {
+                    std::filesystem::path alt = std::filesystem::current_path() / p;
+                    std::string altStr = alt.string();
+                    loadedSurface = IMG_Load(altStr.c_str());
+                    if (loadedSurface) std::cout << "Loaded 9-patch via fallback path: " << altStr << std::endl;
+                }
+            } catch (...) {}
+        }
         if (!loadedSurface) {
             std::cerr << "Unable to load 9-patch image " << path << "! SDL_image Error: " << SDL_GetError() << std::endl;
             return nullptr;

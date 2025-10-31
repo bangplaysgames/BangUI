@@ -7,7 +7,7 @@ namespace BangUI::impl {
 // Concrete implementation for Button. Internal-only header.
 class ButtonImpl : public BangUI::API::UIElement {
 public:
-    ButtonImpl() = default;
+    ButtonImpl() { type = "Button"; }
     ~ButtonImpl() = default;
 
     // compatibility helpers (no API override necessary when inheriting concrete UIElement)
