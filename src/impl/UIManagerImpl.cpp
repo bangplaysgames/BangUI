@@ -106,24 +106,37 @@ void UIManagerImpl::handleEventSDLImpl(const SDL_Event& e) {
                         }
                     } else {
                         if (w->scrollable == "vertical" || w->scrollable == "both") {
+                            float beforeScroll = w->scrollY;
                             w->scrollY -= wheelY * 20.0f;
+                            if (w->id == "winC_scroll_v") {
+                                std::cerr << "[DIAG][UIManager] winC wheel: wheelY=" << wheelY << " beforeScroll=" << beforeScroll << " afterScroll=" << w->scrollY << std::endl;
+                            }
                         }
                     }
                     // Compute content extents and clamp to valid range immediately so renderer sees consistent state
                     {
+                        float safeLeft = w->getSafeContentLeft();
+                        float safeTop = w->getSafeContentTop();
+                        float viewportW = w->getSafeContentRight() - safeLeft;
+                        float viewportH = w->getSafeContentBottom() - safeTop;
                         float contentW = 0.0f; float contentH = 0.0f;
                         for (UIElement* c : w->content) {
                             if (!c) continue;
                             float mW = c->width, mH = c->height;
-                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, w->getSafeContentRight() - w->getSafeContentLeft(), w->getSafeContentBottom() - w->getSafeContentTop(), mW, mH);
-                            // fallback: use stored width/height
+                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, viewportW, viewportH, mW, mH);
+                            // Use original calculation for scrolling behavior (do not convert coordinates)
                             contentW = std::max(contentW, c->x + mW);
                             contentH = std::max(contentH, c->y + mH);
                         }
-                        float viewportW = w->getSafeContentRight() - w->getSafeContentLeft();
-                        float viewportH = w->getSafeContentBottom() - w->getSafeContentTop();
                         float maxScrollX = std::max(0.0f, contentW - viewportW);
                         float maxScrollY = std::max(0.0f, contentH - viewportH);
+                        if (w->id == "winC_scroll_v") {
+                            std::cerr << "[DIAG][UIManager] winC measurements: safeTop=" << safeTop << " contentH=" << contentH << " viewportH=" << viewportH << " maxScrollY=" << maxScrollY << std::endl;
+                            for (UIElement* c : w->content) {
+                                if (!c) continue;
+                                std::cerr << "[DIAG][UIManager] winC child: y=" << c->y << " relY=" << (c->y - safeTop) << std::endl;
+                            }
+                        }
                         float clampedX = std::max(0.0f, std::min(w->scrollX, maxScrollX));
                         float clampedY = std::max(0.0f, std::min(w->scrollY, maxScrollY));
                         if (clampedX != w->scrollX) {
@@ -161,16 +174,19 @@ void UIManagerImpl::handleEventSDLImpl(const SDL_Event& e) {
                     }
                     // Compute content extents and clamp immediately
                     {
+                        float safeLeft = p->getSafeContentLeft();
+                        float safeTop = p->getSafeContentTop();
+                        float viewportW = p->getSafeContentRight() - safeLeft;
+                        float viewportH = p->getSafeContentBottom() - safeTop;
                         float contentW = 0.0f; float contentH = 0.0f;
                         for (UIElement* c : p->content) {
                             if (!c) continue;
                             float mW = c->width, mH = c->height;
-                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, p->getSafeContentRight() - p->getSafeContentLeft(), p->getSafeContentBottom() - p->getSafeContentTop(), mW, mH);
+                            if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, viewportW, viewportH, mW, mH);
+                            // Use original calculation for scrolling behavior (do not convert coordinates)
                             contentW = std::max(contentW, c->x + mW);
                             contentH = std::max(contentH, c->y + mH);
                         }
-                        float viewportW = p->getSafeContentRight() - p->getSafeContentLeft();
-                        float viewportH = p->getSafeContentBottom() - p->getSafeContentTop();
                         float maxScrollX = std::max(0.0f, contentW - viewportW);
                         float maxScrollY = std::max(0.0f, contentH - viewportH);
                         float clampedX = std::max(0.0f, std::min(p->scrollX, maxScrollX));
@@ -412,12 +428,12 @@ void UIManagerImpl::handleMouseDown(float mouseX, float mouseY) {
             if (!w->visible) continue;
             float safeLeft = w->getSafeContentLeft();
             float safeTop = w->getSafeContentTop();
-            float safeW = w->getSafeContentRight() - w->getSafeContentLeft();
-            float safeH = w->getSafeContentBottom() - w->getSafeContentTop();
+            float safeW = w->getSafeContentRight() - safeLeft;
+            float safeH = w->getSafeContentBottom() - safeTop;
             // vertical
                 if (w->scrollable == "vertical" || w->scrollable == "both") {
                 float sbw = 8.0f; float sbx = safeLeft + safeW - sbw - 4.0f; float sby = safeTop + 4.0f; float sbh = safeH - 8.0f;
-                // content height
+                // content height (convert from absolute to content-area-relative coordinates)
                 float contentH = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
                 float viewportH = safeH;
                 if (contentH > viewportH + 1.0f) {
@@ -435,6 +451,7 @@ void UIManagerImpl::handleMouseDown(float mouseX, float mouseY) {
             // horizontal
                 if (w->scrollable == "horizontal" || w->scrollable == "both") {
                 float sbh = 8.0f; float sbx = safeLeft + 4.0f; float sby = safeTop + safeH - sbh - 4.0f; float sbw = safeW - 8.0f;
+                // content width (convert from absolute to content-area-relative coordinates)
                 float contentW = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
                 float viewportW = safeW;
                 // Thumb width should be proportional to viewport/content but scaled to the track width (sbw)
@@ -454,10 +471,11 @@ void UIManagerImpl::handleMouseDown(float mouseX, float mouseY) {
             if (!p->visible) continue;
             float safeLeft = p->getSafeContentLeft();
             float safeTop = p->getSafeContentTop();
-            float safeW = p->getSafeContentRight() - p->getSafeContentLeft();
-            float safeH = p->getSafeContentBottom() - p->getSafeContentTop();
+            float safeW = p->getSafeContentRight() - safeLeft;
+            float safeH = p->getSafeContentBottom() - safeTop;
                 if (p->scrollable == "vertical" || p->scrollable == "both") {
                 float sbw = 8.0f; float sbx = safeLeft + safeW - sbw - 4.0f; float sby = safeTop + 4.0f; float sbh = safeH - 8.0f;
+                // content height (convert from absolute to content-area-relative coordinates)
                 float contentH = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
                 float viewportH = safeH;
                 // Thumb height proportional to track (sbh) times viewport/content ratio
@@ -470,6 +488,7 @@ void UIManagerImpl::handleMouseDown(float mouseX, float mouseY) {
             }
             if (p->scrollable == "horizontal" || p->scrollable == "both") {
                 float sbh = 8.0f; float sbx = safeLeft + 4.0f; float sby = safeTop + safeH - sbh - 4.0f; float sbw = safeW - 8.0f;
+                // content width (convert from absolute to content-area-relative coordinates)
                 float contentW = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
                 float viewportW = safeW;
                 // Thumb width proportional to track (sbw) times viewport/content ratio
@@ -502,10 +521,11 @@ void UIManagerImpl::handleMouseMove(float mouseX, float mouseY) {
         // compute safe content rect once for window
         float safeLeft = w->getSafeContentLeft();
         float safeTop = w->getSafeContentTop();
-        float safeW = w->getSafeContentRight() - w->getSafeContentLeft();
-        float safeH = w->getSafeContentBottom() - w->getSafeContentTop();
+        float safeW = w->getSafeContentRight() - safeLeft;
+        float safeH = w->getSafeContentBottom() - safeTop;
         if (scrollbarDragAxis == 'y') {
         float sby = safeTop + 4.0f; float sbh = safeH - 8.0f; // track area
+                // content height (convert from absolute to content-area-relative coordinates)
                 float contentH = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
                 float viewportH = safeH;
                 // compute thumb height relative to the scrollbar track (sbh)
@@ -527,6 +547,7 @@ void UIManagerImpl::handleMouseMove(float mouseX, float mouseY) {
             }
             if (scrollbarDragAxis == 'x') {
                 float sbx = safeLeft + 4.0f; float sbw = safeW - 8.0f;
+                // content width (convert from absolute to content-area-relative coordinates)
                 float contentW = 0.0f; for (UIElement* c : w->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
                 float viewportW = safeW;
                 // compute thumb width relative to the scrollbar track (sbw)
@@ -548,10 +569,11 @@ void UIManagerImpl::handleMouseMove(float mouseX, float mouseY) {
         // compute safe content rect once for panel
         float safeLeft = p->getSafeContentLeft();
         float safeTop = p->getSafeContentTop();
-        float safeW = p->getSafeContentRight() - p->getSafeContentLeft();
-        float safeH = p->getSafeContentBottom() - p->getSafeContentTop();
+        float safeW = p->getSafeContentRight() - safeLeft;
+        float safeH = p->getSafeContentBottom() - safeTop;
         if (scrollbarDragAxis == 'y') {
         float sby = safeTop + 4.0f; float sbh = safeH - 8.0f; // track area
+                // content height (convert from absolute to content-area-relative coordinates)
                 float contentH = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentH = std::max(contentH, c->y + mH); }
                 float viewportH = safeH;
                 float thumbH = std::max(16.0f, (contentH > 0.0f) ? sbh * (viewportH / contentH) : sbh);
@@ -568,6 +590,7 @@ void UIManagerImpl::handleMouseMove(float mouseX, float mouseY) {
             }
             if (scrollbarDragAxis == 'x') {
                 float sbx = safeLeft + 4.0f; float sbw = safeW - 8.0f;
+                // content width (convert from absolute to content-area-relative coordinates)
                 float contentW = 0.0f; for (UIElement* c : p->content) { if (!c) continue; float mW=c->width,mH=c->height; if (this->activeRenderer) this->activeRenderer->measureElementRenderedSize(c, safeW, safeH, mW, mH); contentW = std::max(contentW, c->x + mW); }
                 float viewportW = safeW;
                 float thumbW = std::max(16.0f, (contentW > 0.0f) ? sbw * (viewportW / contentW) : sbw);

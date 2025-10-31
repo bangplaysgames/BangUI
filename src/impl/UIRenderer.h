@@ -473,8 +473,8 @@ public:
                     Uint8 alphaX = static_cast<Uint8>(255 * tX);
                     float safeLeft = panel->getSafeContentLeft();
                     float safeTop = panel->getSafeContentTop();
-                    float safeW = panel->getSafeContentRight() - panel->getSafeContentLeft();
-                    float safeH = panel->getSafeContentBottom() - panel->getSafeContentTop();
+                    float safeW = panel->getSafeContentRight() - safeLeft;
+                    float safeH = panel->getSafeContentBottom() - safeTop;
                     // compute content extents (measure rendered sizes for elements like Label)
                     float contentW = 0.0f, contentH = 0.0f;
                     for (UIElement* c : panel->content) {
@@ -482,8 +482,10 @@ public:
                         float measuredW = c->width;
                         float measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentW = std::max(contentW, c->x + measuredW);
-                        contentH = std::max(contentH, c->y + measuredH);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        // Clamp to 0 to handle stale child positions when window/panel moves
+                        contentW = std::max(contentW, std::max(0.0f, c->x - safeLeft) + measuredW);
+                        contentH = std::max(contentH, std::max(0.0f, c->y - safeTop) + measuredH);
                     }
                     // Clamp panel scroll offsets to measured content extents to avoid overscroll
                     // Do NOT modify stored panel scroll values from the renderer.
@@ -667,15 +669,17 @@ public:
             {
                 float safeLeftTmp = win->getSafeContentLeft();
                 float safeTopTmp = win->getSafeContentTop();
-                float safeWTmp = win->getSafeContentRight() - win->getSafeContentLeft();
-                float safeHTmp = win->getSafeContentBottom() - win->getSafeContentTop();
+                float safeWTmp = win->getSafeContentRight() - safeLeftTmp;
+                float safeHTmp = win->getSafeContentBottom() - safeTopTmp;
                 float contentW = 0.0f, contentH = 0.0f;
                 for (UIElement* c : win->content) {
                     if (!c) continue;
                     float measuredW = c->width, measuredH = c->height;
                     measureElementRenderedSize(c, safeWTmp, safeHTmp, measuredW, measuredH);
-                    contentW = std::max(contentW, c->x + measuredW);
-                    contentH = std::max(contentH, c->y + measuredH);
+                    // Convert from absolute coordinates to content-area-relative coordinates
+                    // Clamp to 0 to handle stale child positions when window moves
+                    contentW = std::max(contentW, std::max(0.0f, c->x - safeLeftTmp) + measuredW);
+                    contentH = std::max(contentH, std::max(0.0f, c->y - safeTopTmp) + measuredH);
                 }
                 if (win->id == "winC_scroll_v") {
                     std::cerr << "[DIAG][winC] measured contentH=" << contentH << " safeH=" << safeHTmp << " scrollY=" << win->scrollY << std::endl;
@@ -755,8 +759,8 @@ public:
                 if (win->scrollable == "vertical" || win->scrollable == "both") {
                     float safeLeft = win->getSafeContentLeft();
                     float safeTop = win->getSafeContentTop();
-                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
-                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - safeLeft;
+                    float safeH = win->getSafeContentBottom() - safeTop;
                     // scrollbar width
                     float sbw = 8.0f;
                     float sbx = safeLeft + safeW - sbw - 4.0f;
@@ -770,7 +774,8 @@ public:
                     for (UIElement* c : win->content) {
                         float measuredW = c->width, measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentH = std::max(contentH, c->y + measuredH);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        contentH = std::max(contentH, (c->y - safeTop) + measuredH);
                     }
                     float viewportH = safeH;
                     // Thumb size should be computed relative to the track height (sbh)
@@ -814,8 +819,8 @@ public:
                 if (win->scrollable == "horizontal" || win->scrollable == "both") {
                     float safeLeft = win->getSafeContentLeft();
                     float safeTop = win->getSafeContentTop();
-                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
-                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - safeLeft;
+                    float safeH = win->getSafeContentBottom() - safeTop;
                     float sbh = 8.0f;
                     float sbx = safeLeft + 4.0f;
                     float sby = safeTop + safeH - sbh - 4.0f;
@@ -828,7 +833,8 @@ public:
                     for (UIElement* c : win->content) {
                         float measuredW = c->width, measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentW = std::max(contentW, c->x + measuredW);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        contentW = std::max(contentW, (c->x - safeLeft) + measuredW);
                     }
                     float viewportW = safeW;
                     // Thumb width computed relative to track width (sbw)
