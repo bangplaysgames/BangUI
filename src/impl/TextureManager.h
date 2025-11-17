@@ -1,11 +1,13 @@
 #pragma once
 #include "../impl/NineSliceTexture.h"
-#include <SDL3/SDL.h>
-#include <SDL3_image/SDL_image.h>
+#include "../standalone/ImageLoader.h"
+#include "../standalone/SoftwareRenderer.h"
 #include <string>
 #include <map>
 #include <iostream>
 #include <filesystem>
+#include <vector>
+#include <cstring>
 
 // TextureManager: Handles loading, caching, and cleanup of SDL textures
 // Uses RGBA8 format for proper alpha channel support
@@ -18,8 +20,7 @@ private:
 
 public:
     TextureManager(SDL_Renderer* sdlRenderer) : renderer(sdlRenderer) {
-        // SDL3_image doesn't require initialization - it auto-detects formats
-        std::cout << "TextureManager initialized (SDL3_image auto-detects PNG/JPG)" << std::endl;
+        std::cout << "TextureManager initialized (standalone software backend)" << std::endl;
     }
 
     ~TextureManager() {
@@ -53,43 +54,25 @@ public:
             return it->second;
         }
 
-        // Load image as SDL_Surface. Try original path first, then a fallback via current working directory
-        SDL_Surface* loadedSurface = IMG_Load(path.c_str());
-        if (!loadedSurface) {
-            try {
-                std::filesystem::path p(path);
-                if (p.is_relative()) {
-                    std::filesystem::path alt = std::filesystem::current_path() / p;
-                    std::string altStr = alt.string();
-                    loadedSurface = IMG_Load(altStr.c_str());
-                    if (loadedSurface) std::cout << "Loaded texture via fallback path: " << altStr << std::endl;
-                }
-            } catch (...) {}
-        }
-        if (!loadedSurface) {
-            std::cerr << "Unable to load image " << path << "! SDL_image Error: " << SDL_GetError() << std::endl;
+        int w = 0;
+        int h = 0;
+        std::vector<uint8_t> pixels;
+        if (!BangUI::Standalone::LoadImageRGBA(path, w, h, pixels)) {
+            std::cerr << "Unable to load image " << path << std::endl;
             return nullptr;
         }
 
-        // Convert surface to RGBA8888 format for consistent alpha channel handling
-        SDL_Surface* formattedSurface = SDL_ConvertSurface(loadedSurface, SDL_PIXELFORMAT_RGBA8888);
-        SDL_DestroySurface(loadedSurface);
+        SDL_Surface* surface = SDL_CreateSurface(w, h);
+        std::memcpy(SDL_SurfacePixels(surface), pixels.data(), pixels.size());
 
-        if (!formattedSurface) {
-            std::cerr << "Unable to convert surface to RGBA8888! SDL Error: " << SDL_GetError() << std::endl;
-            return nullptr;
-        }
-
-        // Create texture from surface
-        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, formattedSurface);
-        SDL_DestroySurface(formattedSurface);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_DestroySurface(surface);
 
         if (!texture) {
-            std::cerr << "Unable to create texture from " << path << "! SDL Error: " << SDL_GetError() << std::endl;
+            std::cerr << "Unable to create texture from " << path << std::endl;
             return nullptr;
         }
 
-        // Set blend mode to support alpha blending
         SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
 
         // Cache the texture
@@ -131,61 +114,40 @@ public:
             return it->second;
         }
 
-        // Load image as SDL_Surface. Try original path first, then a fallback via current working directory
-        SDL_Surface* loadedSurface = IMG_Load(path.c_str());
-        if (!loadedSurface) {
-            try {
-                std::filesystem::path p(path);
-                if (p.is_relative()) {
-                    std::filesystem::path alt = std::filesystem::current_path() / p;
-                    std::string altStr = alt.string();
-                    loadedSurface = IMG_Load(altStr.c_str());
-                    if (loadedSurface) std::cout << "Loaded 9-patch via fallback path: " << altStr << std::endl;
-                }
-            } catch (...) {}
-        }
-        if (!loadedSurface) {
-            std::cerr << "Unable to load 9-patch image " << path << "! SDL_image Error: " << SDL_GetError() << std::endl;
+        int w = 0;
+        int h = 0;
+        std::vector<uint8_t> pixels;
+        if (!BangUI::Standalone::LoadImageRGBA(path, w, h, pixels)) {
+            std::cerr << "Unable to load 9-patch image " << path << std::endl;
             return nullptr;
         }
 
-        // Create 9-slice texture object
         NineSliceTexture* nineSlice = new NineSliceTexture();
-        nineSlice->textureWidth = loadedSurface->w;
-        nineSlice->textureHeight = loadedSurface->h;
+        nineSlice->textureWidth = w;
+        nineSlice->textureHeight = h;
         nineSlice->isNinePatch = NineSliceTexture::isNinePatchFile(path);
 
         // Parse 9-patch if applicable
         if (nineSlice->isNinePatch) {
-            if (!nineSlice->parseNinePatch(loadedSurface)) {
+            if (!nineSlice->parseNinePatch(pixels, w, h)) {
                 std::cerr << "Failed to parse 9-patch: " << path << std::endl;
-                SDL_DestroySurface(loadedSurface);
                 delete nineSlice;
                 return nullptr;
             }
         }
 
-        // Convert surface to RGBA8888 format
-        SDL_Surface* formattedSurface = SDL_ConvertSurface(loadedSurface, SDL_PIXELFORMAT_RGBA8888);
-        SDL_DestroySurface(loadedSurface);
+        SDL_Surface* surface = SDL_CreateSurface(w, h);
+        std::memcpy(SDL_SurfacePixels(surface), pixels.data(), pixels.size());
 
-        if (!formattedSurface) {
-            std::cerr << "Unable to convert 9-patch surface to RGBA8888! SDL Error: " << SDL_GetError() << std::endl;
-            delete nineSlice;
-            return nullptr;
-        }
-
-        // Create texture from surface
-        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, formattedSurface);
-        SDL_DestroySurface(formattedSurface);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_DestroySurface(surface);
 
         if (!texture) {
-            std::cerr << "Unable to create texture from 9-patch " << path << "! SDL Error: " << SDL_GetError() << std::endl;
+            std::cerr << "Unable to create texture from 9-patch " << path << std::endl;
             delete nineSlice;
             return nullptr;
         }
 
-        // Set blend mode to support alpha blending
         SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
 
         nineSlice->texture = texture;

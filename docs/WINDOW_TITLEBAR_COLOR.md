@@ -1,5 +1,8 @@
 # Window Title Bar Color Support
 
+> **Note:** The implementation notes reference SDL renderer APIs. These now map
+> directly to BangUI's software renderer, so SDL is no longer required.
+
 BangUI windows now support customizable title bar colors with full RGBA8 color values, including alpha transparency.
 
 ## Feature Overview

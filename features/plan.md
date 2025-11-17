@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Tech Stack: C++17, SDL3, CMake
+Tech Stack: C++17, standalone software renderer, CMake
 
 Architecture:
 - src/: library implementation

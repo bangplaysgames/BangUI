@@ -2,7 +2,8 @@
 #pragma once
 
 #include "UIElement.h"
-#include <SDL3/SDL.h>
+#include "Events.h"
+#include "Theme.h"
 #include <memory>
 
 namespace BangUI::API {
@@ -14,10 +15,7 @@ public:
     virtual ~IUIManager() = default;
     virtual void Update(float dt) = 0;
     virtual void Render(IRenderer* renderer) = 0;
-    // Event handling: applications may override onEvent to intercept events.
-    // Return true to indicate the application has handled the event and the
-    // library should not perform its default input processing.
-    virtual bool onEvent(const SDL_Event& e) { (void)e; return false; }
+    virtual bool onEvent(const UIEvent& e) { (void)e; return false; }
     // Additional shimbed methods implemented by the impl during migration
     virtual void setApplicationWindow(float width, float height, float padding = 10.0f) = 0;
     virtual float getAppWindowWidth() const = 0;
@@ -34,7 +32,11 @@ public:
     // in response to those events. Default implementations are no-ops.
     virtual void startEventListening() { }
     virtual void stopEventListening() { }
-    virtual void handleEventSDL(const SDL_Event& e) = 0;
+    virtual void handleEvent(const UIEvent& e) = 0;
+
+    // Background theming controls
+    virtual void setBackgroundTheme(const BackgroundTheme& theme) = 0;
+    virtual const BackgroundTheme& getBackgroundTheme() const = 0;
 };
 
 } // namespace BangUI::API

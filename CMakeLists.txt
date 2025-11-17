@@ -8,15 +8,6 @@ if(DEFINED ENV{VCPKG_ROOT})
 endif()
 
 
-# Add vcpkg installed directory to CMAKE_PREFIX_PATH for package discovery
-set(CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows" ${CMAKE_PREFIX_PATH})
-
-# Add SDL3 include directory globally for all targets
-include_directories("${CMAKE_SOURCE_DIR}/vcpkg/installed/x64-windows/include")
-
-# Option to build dependencies only in a special configuration
-option(BUILD_DEPENDENCIES "Build all dependencies" OFF)
-
 # Source directories
 add_subdirectory(src)
 option(BUILD_TESTS "Build tests" OFF)
@@ -24,7 +15,5 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# Only add DiligentEngine if BUILD_DEPENDENCIES is ON
-if(BUILD_DEPENDENCIES)
-    add_subdirectory(DiligentEngine)
-endif()
+# Configure Visual Studio F5/Debug to launch the native demo by default.
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT BangUI_native_demo)

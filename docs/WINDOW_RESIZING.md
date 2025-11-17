@@ -1,5 +1,9 @@
 # Window Resizing Feature
 
+> **Note:** Although the examples mention SDL event constants, BangUI now emits
+> its own `UIEvent` structures and uses an internal renderer, eliminating the
+> SDL dependency.
+
 BangUI now supports interactive window resizing through a visual resize handle in the bottom-right corner.
 
 ## Overview
