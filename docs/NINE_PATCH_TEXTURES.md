@@ -1,5 +1,9 @@
 # 9-Patch Texture Support
 
+> **Note:** The code snippets mention SDL helpers. These calls are now routed
+> through BangUI's software renderer and stb_image backend, so SDL DLLs are no
+> longer necessary.
+
 BangUI now supports Android-style 9-patch (.9.png) textures for windows and panels, allowing scalable UI elements with proper corner preservation.
 
 ## Overview

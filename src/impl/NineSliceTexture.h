@@ -1,7 +1,8 @@
 #pragma once
-#include <SDL3/SDL.h>
+#include "../standalone/SoftwareRenderer.h"
 #include <string>
 #include <iostream>
+#include <vector>
 
 // NineSliceTexture: Handles 9-patch/9-slice texture loading and rendering
 // Supports Android .9.png format with 1-pixel guide borders
@@ -41,32 +42,24 @@ public:
     }
 
     // Parse 9-patch border pixels to determine stretch regions
-    bool parseNinePatch(SDL_Surface* surface) {
-        if (!surface) return false;
-
-        int w = surface->w;
-        int h = surface->h;
-
-        if (w < 3 || h < 3) {
+    bool parseNinePatch(const std::vector<Uint8>& pixels, int w, int h) {
+        if (pixels.empty() || w < 3 || h < 3) {
             std::cerr << "9-patch image too small (must be at least 3x3)" << std::endl;
             return false;
         }
 
-        // Lock surface for pixel access
-        if (SDL_MUSTLOCK(surface)) {
-            SDL_LockSurface(surface);
-        }
-
-        Uint32* pixels = (Uint32*)surface->pixels;
-        int pitch = surface->pitch / 4; // pitch in pixels (assuming 32-bit RGBA)
+        auto readPixel = [&](int x, int y) -> const Uint8* {
+            return &pixels[(y * w + x) * 4];
+        };
 
         // Parse top border (horizontal stretch)
         bool foundStart = false;
         for (int x = 1; x < w - 1; x++) {
-            Uint32 pixel = pixels[x];
-            Uint8 r, g, b, a;
-            const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
-            SDL_GetRGBA(pixel, fmt, nullptr, &r, &g, &b, &a);
+            const Uint8* px = readPixel(x, 0);
+            Uint8 r = px[0];
+            Uint8 g = px[1];
+            Uint8 b = px[2];
+            Uint8 a = px[3];
 
             // Black pixel (RGB near 0) indicates stretchable region
             bool isBlack = (a > 200) && (r < 50) && (g < 50) && (b < 50);
@@ -92,10 +85,11 @@ public:
         // Parse left border (vertical stretch)
         foundStart = false;
         for (int y = 1; y < h - 1; y++) {
-            Uint32 pixel = pixels[y * pitch];
-            Uint8 r, g, b, a;
-            const SDL_PixelFormatDetails* fmt = SDL_GetPixelFormatDetails(surface->format);
-            SDL_GetRGBA(pixel, fmt, nullptr, &r, &g, &b, &a);
+            const Uint8* px = readPixel(0, y);
+            Uint8 r = px[0];
+            Uint8 g = px[1];
+            Uint8 b = px[2];
+            Uint8 a = px[3];
 
             bool isBlack = (a > 200) && (r < 50) && (g < 50) && (b < 50);
 
@@ -121,10 +115,6 @@ public:
         contentTop = 1;
         contentRight = w - 2;
         contentBottom = h - 2;
-
-        if (SDL_MUSTLOCK(surface)) {
-            SDL_UnlockSurface(surface);
-        }
 
         std::cout << "9-patch parsed: stretch H(" << stretchLeft << "-" << stretchRight
                   << ") V(" << stretchTop << "-" << stretchBottom << ")" << std::endl;

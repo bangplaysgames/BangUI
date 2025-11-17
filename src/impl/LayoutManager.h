@@ -3,7 +3,7 @@
 #include <vector>
 #include <map>
 #include <string>
-#include <SDL3_image/SDL_image.h>
+#include "../standalone/ImageLoader.h"
 #include <iostream>
 
 // Implementation depends on concrete models for Window/Panel which are in the models/ directory
@@ -23,22 +23,14 @@ static std::pair<int,int> getImageSizeCached(const std::string& path) {
     auto it = g_texture_size_cache.find(path);
     if (it != g_texture_size_cache.end()) return it->second;
 
-#ifdef NO_SDL_IMAGE
-    // In unit tests we may not link SDL_image. Return 0 size to avoid linking.
-    g_texture_size_cache[path] = {0,0};
-    return {0,0};
-#else
-    SDL_Surface* surf = IMG_Load(path.c_str());
-    if (!surf) {
+    int w = 0;
+    int h = 0;
+    if (!BangUI::Standalone::ProbeImageSize(path, w, h)) {
         g_texture_size_cache[path] = {0,0};
         return {0,0};
     }
-    int w = surf->w;
-    int h = surf->h;
-    SDL_DestroySurface(surf);
     g_texture_size_cache[path] = {w,h};
     return {w,h};
-#endif
 }
 
 // LayoutManager: Computes element positions based on docking and size modes

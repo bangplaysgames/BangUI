@@ -21,6 +21,10 @@ public:
         return uiRenderer.getFontManager();
     }
 
+    void renderBackground(const API::BackgroundTheme& theme, float width, float height) override {
+        uiRenderer.renderBackground(theme, width, height);
+    }
+
     void renderPanel(const API::IPanel* panel) override {
         // cast to concrete Panel for now (compat shim keeps types identical)
         uiRenderer.renderPanel(reinterpret_cast<const Panel*>(panel));

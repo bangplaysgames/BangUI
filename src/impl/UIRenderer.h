@@ -1,7 +1,7 @@
 #pragma once
 #define _USE_MATH_DEFINES
 #include <cmath>
-#include <SDL3/SDL.h>
+#include "../standalone/SoftwareRenderer.h"
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "ButtonImpl.h"
 #include "LabelImpl.h"
 #include <iostream>
+#include "../api/Theme.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -236,6 +237,96 @@ private:
         }
     }
 
+    void drawLineWithThickness(float x1, float y1, float x2, float y2, const BangUI::API::Color& color, float thickness) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        if (thickness <= 1.01f) {
+            SDL_RenderLine(renderer, x1, y1, x2, y2);
+            return;
+        }
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        float len = sqrtf(dx * dx + dy * dy);
+        if (len <= 0.0001f) return;
+        float nx = -dy / len;
+        float ny = dx / len;
+        int steps = std::max(1, static_cast<int>(std::round(thickness)));
+        float half = (steps - 1) / 2.0f;
+        for (int i = 0; i < steps; ++i) {
+            float offset = i - half;
+            float ox = nx * offset;
+            float oy = ny * offset;
+            SDL_RenderLine(renderer, x1 + ox, y1 + oy, x2 + ox, y2 + oy);
+        }
+    }
+
+    void drawCloseIcon(float x, float y, float size, const BangUI::API::Color& color) {
+        float margin = size * 0.25f;
+        drawLineWithThickness(x + margin, y + margin, x + size - margin, y + size - margin, color, 2.0f);
+        drawLineWithThickness(x + size - margin, y + margin, x + margin, y + size - margin, color, 2.0f);
+    }
+
+    void drawMinimizeIcon(float x, float y, float size, const BangUI::API::Color& color) {
+        float margin = size * 0.3f;
+        float yLine = y + size - margin;
+        drawLineWithThickness(x + margin, yLine, x + size - margin, yLine, color, 2.0f);
+    }
+
+    void drawMaximizeIcon(float x, float y, float size, const BangUI::API::Color& color) {
+        float margin = size * 0.25f;
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        SDL_FRect rect{ x + margin, y + margin, size - margin * 2.0f, size - margin * 2.0f };
+        SDL_RenderRect(renderer, &rect);
+    }
+
+    void drawBurgerIcon(float x, float y, float size, const BangUI::API::Color& primary, const BangUI::API::Color& accent) {
+        float margin = size * 0.25f;
+        float spacing = (size - margin * 2.0f) / 3.0f;
+        drawLineWithThickness(x + margin, y + margin, x + size - margin, y + margin, primary, 2.0f);
+        drawLineWithThickness(x + margin, y + margin + spacing, x + size - margin, y + margin + spacing, primary, 2.0f);
+        drawLineWithThickness(x + margin, y + margin + 2.0f * spacing, x + size - margin, y + margin + 2.0f * spacing, accent, 2.0f);
+    }
+
+    void drawWindowChrome(const Window* win) {
+        if (!win) return;
+        std::vector<Window::ChromeButtonLayout> layouts;
+        win->computeChromeLayout(layouts);
+        for (const auto& layout : layouts) {
+            const Window::ChromeButton* btn = layout.button;
+            if (!btn) continue;
+            BangUI::API::Color bg = btn->backgroundColor;
+            bg.a = static_cast<Uint8>(static_cast<float>(bg.a) * win->opacity);
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, bg.a);
+            drawRoundedRectangle(layout.x, layout.y, layout.width, layout.height, btn->cornerRadius);
+
+            BangUI::API::Color iconColor = btn->iconColor;
+            iconColor.a = static_cast<Uint8>(static_cast<float>(iconColor.a) * win->opacity);
+
+            switch (btn->type) {
+            case Window::ChromeButton::Type::Close:
+                drawCloseIcon(layout.x, layout.y, layout.width, iconColor);
+                break;
+            case Window::ChromeButton::Type::Minimize:
+                drawMinimizeIcon(layout.x, layout.y, layout.width, iconColor);
+                break;
+            case Window::ChromeButton::Type::Maximize:
+                drawMaximizeIcon(layout.x, layout.y, layout.width, iconColor);
+                break;
+            case Window::ChromeButton::Type::Menu:
+                drawBurgerIcon(layout.x, layout.y, layout.width, iconColor, iconColor);
+                break;
+            case Window::ChromeButton::Type::Custom:
+                break;
+            }
+
+            if (btn->type == Window::ChromeButton::Type::Custom && btn->customDraw) {
+                btn->customDraw(renderer, *btn, layout.x, layout.y, layout.width, layout.height);
+            }
+        }
+    }
+
     // Render a textured rectangle with optional color overlay blending
     // The color's alpha channel determines how much the color blends over the texture
     void renderTexturedRectangle(SDL_Texture* texture, float x, float y, float w, float h,
@@ -308,6 +399,81 @@ public:
 
     FontManager* getFontManager() {
         return fontManager;
+    }
+
+    void renderBackground(const BangUI::API::BackgroundTheme& theme, float width, float height) {
+        if (!theme.enabled) return;
+        float w = std::max(0.0f, width);
+        float h = std::max(0.0f, height);
+
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(renderer, theme.clearColor.r, theme.clearColor.g, theme.clearColor.b, theme.clearColor.a);
+        SDL_RenderClear(renderer);
+
+        if (!theme.texture.empty()) {
+            float opacity = std::clamp(theme.textureOpacity, 0.0f, 1.0f);
+            Uint8 textureAlpha = static_cast<Uint8>(opacity * 255.0f);
+            if (textureAlpha > 0) {
+                if (theme.textureNinePatch || NineSliceTexture::isNinePatchFile(theme.texture)) {
+                    NineSliceTexture* nine = textureManager->loadNineSliceTexture(theme.texture);
+                    if (nine) {
+                        nine->render(renderer, 0.0f, 0.0f, w, h, textureAlpha);
+                    }
+                } else {
+                    SDL_Texture* tex = textureManager->loadTexture(theme.texture);
+                    if (tex) {
+                        renderTexturedRectangle(tex, 0.0f, 0.0f, w, h, 255, 255, 255, textureAlpha, 0);
+                    }
+                }
+            }
+        }
+
+        for (const auto& shape : theme.shapes) {
+            auto resolveX = [&](float value) {
+                return shape.normalized ? value * w : value;
+            };
+            auto resolveY = [&](float value) {
+                return shape.normalized ? value * h : value;
+            };
+            auto resolveScalar = [&](float value) {
+                return shape.normalized ? value * std::max(w, h) : value;
+            };
+
+            switch (shape.type) {
+            case BangUI::API::VectorShapeType::Rectangle: {
+                SDL_FRect rect{
+                    resolveX(shape.x),
+                    resolveY(shape.y),
+                    shape.normalized ? shape.width * w : shape.width,
+                    shape.normalized ? shape.height * h : shape.height
+                };
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, shape.color.r, shape.color.g, shape.color.b, shape.color.a);
+                SDL_RenderFillRect(renderer, &rect);
+                break;
+            }
+            case BangUI::API::VectorShapeType::RoundedRectangle: {
+                float rx = resolveX(shape.x);
+                float ry = resolveY(shape.y);
+                float rw = shape.normalized ? shape.width * w : shape.width;
+                float rh = shape.normalized ? shape.height * h : shape.height;
+                float radius = shape.normalized ? shape.radius * std::min(w, h) : shape.radius;
+                SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderDrawColor(renderer, shape.color.r, shape.color.g, shape.color.b, shape.color.a);
+                drawRoundedRectangle(rx, ry, rw, rh, radius);
+                break;
+            }
+            case BangUI::API::VectorShapeType::Line: {
+                float x1 = resolveX(shape.x);
+                float y1 = resolveY(shape.y);
+                float x2 = resolveX(shape.x2);
+                float y2 = resolveY(shape.y2);
+                float thickness = resolveScalar(shape.thickness);
+                drawLineWithThickness(x1, y1, x2, y2, shape.color, std::max(1.0f, thickness));
+                break;
+            }
+            }
+        }
     }
 
     // Expose measurement to callers via the public API so input code can
@@ -473,8 +639,8 @@ public:
                     Uint8 alphaX = static_cast<Uint8>(255 * tX);
                     float safeLeft = panel->getSafeContentLeft();
                     float safeTop = panel->getSafeContentTop();
-                    float safeW = panel->getSafeContentRight() - panel->getSafeContentLeft();
-                    float safeH = panel->getSafeContentBottom() - panel->getSafeContentTop();
+                    float safeW = panel->getSafeContentRight() - safeLeft;
+                    float safeH = panel->getSafeContentBottom() - safeTop;
                     // compute content extents (measure rendered sizes for elements like Label)
                     float contentW = 0.0f, contentH = 0.0f;
                     for (UIElement* c : panel->content) {
@@ -482,8 +648,10 @@ public:
                         float measuredW = c->width;
                         float measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentW = std::max(contentW, c->x + measuredW);
-                        contentH = std::max(contentH, c->y + measuredH);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        // Clamp to 0 to handle stale child positions when window/panel moves
+                        contentW = std::max(contentW, std::max(0.0f, c->x - safeLeft) + measuredW);
+                        contentH = std::max(contentH, std::max(0.0f, c->y - safeTop) + measuredH);
                     }
                     // Clamp panel scroll offsets to measured content extents to avoid overscroll
                     // Do NOT modify stored panel scroll values from the renderer.
@@ -550,92 +718,106 @@ public:
             useMapped = diegeticMapper(win->anchorMesh->resource, win->anchorBone.c_str(), &mappedX, &mappedY, &mappedScale, &mappedRot);
         }
 
-        // Check if window has a texture
-        NineSliceTexture* nineSlice = nullptr;
-        SDL_Texture* texture = nullptr;
-        bool hasTexture = false;
+        auto resolveTexturePath = [&](const std::string& overridePath, const std::string& legacyPath) -> std::string {
+            if (!overridePath.empty()) return overridePath;
+            return legacyPath;
+        };
 
-        if (!win->src.empty()) {
-            if (NineSliceTexture::isNinePatchFile(win->src)) {
-                nineSlice = textureManager->loadNineSliceTexture(win->src);
-                hasTexture = (nineSlice != nullptr);
+        std::string bodyTexturePath = resolveTexturePath(win->bodyTexture, win->src);
+        NineSliceTexture* bodyNineSlice = nullptr;
+        SDL_Texture* bodyTexture = nullptr;
+        bool hasBodyTexture = false;
+
+        if (!bodyTexturePath.empty()) {
+            if (NineSliceTexture::isNinePatchFile(bodyTexturePath)) {
+                bodyNineSlice = textureManager->loadNineSliceTexture(bodyTexturePath);
+                hasBodyTexture = (bodyNineSlice != nullptr);
             } else {
-                texture = textureManager->loadTexture(win->src);
-                hasTexture = (texture != nullptr);
+                bodyTexture = textureManager->loadTexture(bodyTexturePath);
+                hasBodyTexture = (bodyTexture != nullptr);
             }
         }
 
-    // Cache title/body color values (used by rendering and diagnostic dumps)
-    Uint8 titleR = win->titleBarColor.r;
-    Uint8 titleG = win->titleBarColor.g;
-    Uint8 titleB = win->titleBarColor.b;
-    Uint8 titleA = static_cast<Uint8>(win->titleBarColor.a * win->opacity);
-    Uint8 bodyA = static_cast<Uint8>(win->backgroundColor.a * win->opacity);
-    Uint8 bodyR = win->backgroundColor.r;
-    Uint8 bodyG = win->backgroundColor.g;
-    Uint8 bodyB = win->backgroundColor.b;
+        NineSliceTexture* titleNineSlice = nullptr;
+        SDL_Texture* titleTexture = nullptr;
+        bool hasTitleTexture = false;
+        if (win->titleBarVisible && !win->titleBarTexture.empty()) {
+            if (NineSliceTexture::isNinePatchFile(win->titleBarTexture)) {
+                titleNineSlice = textureManager->loadNineSliceTexture(win->titleBarTexture);
+                hasTitleTexture = (titleNineSlice != nullptr);
+            } else {
+                titleTexture = textureManager->loadTexture(win->titleBarTexture);
+                hasTitleTexture = (titleTexture != nullptr);
+            }
+        }
 
-    // If texture exists, render ONLY the texture (no title bar, no border, no color)
-        if (hasTexture) {
-            if (nineSlice) {
-                if (useMapped) nineSlice->render(renderer, mappedX, mappedY, w * mappedScale, h * mappedScale);
-                else nineSlice->render(renderer, x, y, w, h);
-                // Set safe content area to center patch only
-                nineSlice->getSafeContentInsets(
+        const bool useBodyTexture = hasBodyTexture;
+        const bool useTitleTexture = hasTitleTexture && win->titleBarVisible;
+
+        Uint8 titleR = win->titleBarColor.r;
+        Uint8 titleG = win->titleBarColor.g;
+        Uint8 titleB = win->titleBarColor.b;
+        Uint8 titleA = (win->titleBarVisible && !useTitleTexture)
+            ? static_cast<Uint8>(win->titleBarColor.a * win->opacity)
+            : 0;
+        Uint8 bodyA = static_cast<Uint8>(win->backgroundColor.a * win->opacity);
+        Uint8 bodyR = win->backgroundColor.r;
+        Uint8 bodyG = win->backgroundColor.g;
+        Uint8 bodyB = win->backgroundColor.b;
+
+        const float TEXTURE_OVERLAP = 6.0f;
+        float bodyOffset = (useBodyTexture && (useTitleTexture || titleA > 0))
+            ? std::max(0.0f, Window::TITLE_BAR_HEIGHT - TEXTURE_OVERLAP)
+            : 0.0f;
+        float bodyDrawY = y + bodyOffset;
+        float bodyDrawH = h - bodyOffset;
+
+        if (useBodyTexture) {
+            if (bodyNineSlice) {
+                if (useMapped) {
+                    bodyNineSlice->render(renderer, mappedX, mappedY + bodyOffset, w * mappedScale, (h - bodyOffset) * mappedScale, static_cast<Uint8>(255 * win->opacity));
+                } else {
+                    bodyNineSlice->render(renderer, x, bodyDrawY, w, bodyDrawH, static_cast<Uint8>(255 * win->opacity));
+                }
+                bodyNineSlice->getSafeContentInsets(
                     const_cast<Window*>(win)->contentLeft,
                     const_cast<Window*>(win)->contentTop,
                     const_cast<Window*>(win)->contentRight,
                     const_cast<Window*>(win)->contentBottom
                 );
-            } else if (texture) {
+            } else if (bodyTexture) {
                 if (useMapped) {
-                    renderTexturedRectangle(texture, mappedX, mappedY, w * mappedScale, h * mappedScale, 255,255,255,255,0, mappedRot);
+                    renderTexturedRectangle(bodyTexture, mappedX, mappedY + bodyOffset, w * mappedScale, (h - bodyOffset) * mappedScale,
+                                            255, 255, 255, static_cast<Uint8>(255 * win->opacity), 0, mappedRot);
                 } else {
-                    renderTexturedRectangle(texture, x, y, w, h, 255,255,255,255,0, 0.0f);
+                    renderTexturedRectangle(bodyTexture, x, bodyDrawY, w, bodyDrawH,
+                                            255, 255, 255, static_cast<Uint8>(255 * win->opacity), 0, 0.0f);
                 }
-                // Regular texture - entire area is safe
                 const_cast<Window*>(win)->contentLeft = 0.0f;
                 const_cast<Window*>(win)->contentTop = 0.0f;
                 const_cast<Window*>(win)->contentRight = 0.0f;
                 const_cast<Window*>(win)->contentBottom = 0.0f;
             }
         } else {
-            // No texture - render traditional window with title bar and body directly
             if (radius > 0) {
-                // Draw full rounded window body first
                 SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
                 SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                drawRoundedRectangle(x, y, w, h, radius);
-
-                // Overlay title area without disturbing the rounded corners.
-                // We draw the center title rect (avoids the corner areas) and
-                // small side rects that start below the corner arc.
+                drawRoundedRectangle(x, bodyDrawY, w, h - bodyOffset, radius);
                 if (titleA > 0) {
                     SDL_SetRenderDrawColor(renderer, titleR, titleG, titleB, titleA);
                     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-
-                    // Draw the title bar using the same rasterization method as
-                    // the window body, but only with the top corners rounded. This
-                    // produces identical corner shapes and avoids seams.
                     drawRoundedTopRectangle(x, y, w, titleHeight, radius);
                 }
-
             } else {
-                // No rounding - draw simple rectangles
                 SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
                 SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                SDL_FRect titleBar = {x, y, w, titleHeight};
-                SDL_RenderFillRect(renderer, &titleBar);
-
+                SDL_FRect body = {x, bodyDrawY, w, h - bodyOffset};
+                SDL_RenderFillRect(renderer, &body);
                 if (titleA > 0) {
                     SDL_SetRenderDrawColor(renderer, titleR, titleG, titleB, titleA);
-                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+                    SDL_FRect titleBar = {x, y, w, titleHeight};
                     SDL_RenderFillRect(renderer, &titleBar);
                 }
-
-                SDL_SetRenderDrawColor(renderer, bodyR, bodyG, bodyB, bodyA);
-                SDL_FRect body = {x, y + titleHeight, w, h - titleHeight};
-                SDL_RenderFillRect(renderer, &body);
             }
         }
 
@@ -667,15 +849,17 @@ public:
             {
                 float safeLeftTmp = win->getSafeContentLeft();
                 float safeTopTmp = win->getSafeContentTop();
-                float safeWTmp = win->getSafeContentRight() - win->getSafeContentLeft();
-                float safeHTmp = win->getSafeContentBottom() - win->getSafeContentTop();
+                float safeWTmp = win->getSafeContentRight() - safeLeftTmp;
+                float safeHTmp = win->getSafeContentBottom() - safeTopTmp;
                 float contentW = 0.0f, contentH = 0.0f;
                 for (UIElement* c : win->content) {
                     if (!c) continue;
                     float measuredW = c->width, measuredH = c->height;
                     measureElementRenderedSize(c, safeWTmp, safeHTmp, measuredW, measuredH);
-                    contentW = std::max(contentW, c->x + measuredW);
-                    contentH = std::max(contentH, c->y + measuredH);
+                    // Convert from absolute coordinates to content-area-relative coordinates
+                    // Clamp to 0 to handle stale child positions when window moves
+                    contentW = std::max(contentW, std::max(0.0f, c->x - safeLeftTmp) + measuredW);
+                    contentH = std::max(contentH, std::max(0.0f, c->y - safeTopTmp) + measuredH);
                 }
                 if (win->id == "winC_scroll_v") {
                     std::cerr << "[DIAG][winC] measured contentH=" << contentH << " safeH=" << safeHTmp << " scrollY=" << win->scrollY << std::endl;
@@ -755,8 +939,8 @@ public:
                 if (win->scrollable == "vertical" || win->scrollable == "both") {
                     float safeLeft = win->getSafeContentLeft();
                     float safeTop = win->getSafeContentTop();
-                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
-                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - safeLeft;
+                    float safeH = win->getSafeContentBottom() - safeTop;
                     // scrollbar width
                     float sbw = 8.0f;
                     float sbx = safeLeft + safeW - sbw - 4.0f;
@@ -770,7 +954,8 @@ public:
                     for (UIElement* c : win->content) {
                         float measuredW = c->width, measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentH = std::max(contentH, c->y + measuredH);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        contentH = std::max(contentH, (c->y - safeTop) + measuredH);
                     }
                     float viewportH = safeH;
                     // Thumb size should be computed relative to the track height (sbh)
@@ -814,8 +999,8 @@ public:
                 if (win->scrollable == "horizontal" || win->scrollable == "both") {
                     float safeLeft = win->getSafeContentLeft();
                     float safeTop = win->getSafeContentTop();
-                    float safeW = win->getSafeContentRight() - win->getSafeContentLeft();
-                    float safeH = win->getSafeContentBottom() - win->getSafeContentTop();
+                    float safeW = win->getSafeContentRight() - safeLeft;
+                    float safeH = win->getSafeContentBottom() - safeTop;
                     float sbh = 8.0f;
                     float sbx = safeLeft + 4.0f;
                     float sby = safeTop + safeH - sbh - 4.0f;
@@ -828,7 +1013,8 @@ public:
                     for (UIElement* c : win->content) {
                         float measuredW = c->width, measuredH = c->height;
                         measureElementRenderedSize(c, safeW, safeH, measuredW, measuredH);
-                        contentW = std::max(contentW, c->x + measuredW);
+                        // Convert from absolute coordinates to content-area-relative coordinates
+                        contentW = std::max(contentW, (c->x - safeLeft) + measuredW);
                     }
                     float viewportW = safeW;
                     // Thumb width computed relative to track width (sbw)
@@ -864,6 +1050,14 @@ public:
 
             
 
+        if (useTitleTexture) {
+            if (titleNineSlice) {
+                titleNineSlice->render(renderer, x, y, w, titleHeight, static_cast<Uint8>(255 * win->opacity));
+            } else if (titleTexture) {
+                renderTexturedRectangle(titleTexture, x, y, w, titleHeight, 255,255,255,static_cast<Uint8>(255 * win->opacity), 0, 0.0f);
+            }
+        }
+
             // Draw border outside the window bounds so it doesn't reduce safe content.
             if (win->borderWidth > 0.0f) {
                 uint8_t brc = win->borderColor.r;
@@ -875,49 +1069,25 @@ public:
                 drawRoundedRectangleBorder(x - bw, y - bw, w + 2*bw, h + 2*bw, radius + bw);
             }
 
-            // Close button (draw after children so it overlays content)
-            if (win->closeable) {
-                float closeX = x + w - Window::CLOSE_BUTTON_SIZE - Window::CLOSE_BUTTON_MARGIN * 2;
-                float closeY = y + (titleHeight - Window::CLOSE_BUTTON_SIZE) / 2;
+            drawWindowChrome(win);
 
-                // Check if using custom texture
-                SDL_Texture* closeTexture = nullptr;
-                if (!win->closeSrc.empty()) {
-                    closeTexture = textureManager->loadTexture(win->closeSrc);
-                }
-
-                if (closeTexture) {
-                    // Render custom close button texture
-                    renderTexturedRectangle(closeTexture, closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE, 255,255,255,255,0, 0.0f);
-                } else {
-                    // Default close button rendering
-                    // Button background
-                    SDL_SetRenderDrawColor(renderer, 200, 60, 60, 255);
-                    SDL_FRect closeBtn = {closeX, closeY, Window::CLOSE_BUTTON_SIZE, Window::CLOSE_BUTTON_SIZE};
-                    SDL_RenderFillRect(renderer, &closeBtn);
-
-                    // X symbol
-                    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-                    drawCloseButton(closeX, closeY, Window::CLOSE_BUTTON_SIZE);
-                }
-            }
-
-            // Title text rendering (if title present and a non-texture window). Draw after children
-            if (!win->title.empty() && !hasTexture) {
+            if (!win->title.empty()) {
                 int fontSize = static_cast<int>(Window::TITLE_BAR_HEIGHT * 0.6f);
-                TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                FontManager::FontInstance* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
                 if (font) {
-                    SDL_Color textColor = { win->textColor.r, win->textColor.g, win->textColor.b, static_cast<Uint8>(win->textColor.a * win->opacity) };
-                    float leftPadding = 8.0f;
-                    float rightPadding = 8.0f;
-                    float reservedForClose = win->closeable ? (Window::CLOSE_BUTTON_SIZE + Window::CLOSE_BUTTON_MARGIN * 2) : 0.0f;
-                    float availableW = w - leftPadding - rightPadding - reservedForClose;
+                    BangUI::API::Color titleColor = (win->titleTextColor.a > 0) ? win->titleTextColor : win->textColor;
+                    SDL_Color textColor = { titleColor.r, titleColor.g, titleColor.b, static_cast<Uint8>(static_cast<float>(titleColor.a) * win->opacity) };
+                    float leftBound = win->getTitleTextLeftBound();
+                    float rightBound = win->getTitleTextRightBound();
+                    float availableW = std::max(0.0f, rightBound - leftBound);
 
                     if (availableW > 8.0f) {
                         int wholeW = 0, wholeH = 0;
                         SDL_Texture* wholeTex = fontManager->getTextTexture(renderer, font, win->title, textColor, wholeW, wholeH);
                         if (wholeTex && static_cast<float>(wholeW) <= availableW) {
-                            float tx = x + leftPadding;
+                            float tx = leftBound + std::max(0.0f, (availableW - static_cast<float>(wholeW)) / 2.0f);
+                            if (tx + wholeW > rightBound) tx = rightBound - wholeW;
+                            if (tx < leftBound) tx = leftBound;
                             float ty = y + (Window::TITLE_BAR_HEIGHT - wholeH) / 2.0f;
                             SDL_FRect dst = {tx, ty, static_cast<float>(wholeW), static_cast<float>(wholeH)};
                             SDL_SetTextureBlendMode(wholeTex, SDL_BLENDMODE_BLEND);
@@ -946,7 +1116,9 @@ public:
                             int bw = 0, bh = 0;
                             SDL_Texture* bestTex = fontManager->getTextTexture(renderer, font, best, textColor, bw, bh);
                             if (bestTex) {
-                                float tx = x + leftPadding;
+                                float tx = leftBound + std::max(0.0f, (availableW - static_cast<float>(bw)) / 2.0f);
+                                if (tx + bw > rightBound) tx = rightBound - bw;
+                                if (tx < leftBound) tx = leftBound;
                                 float ty = y + (Window::TITLE_BAR_HEIGHT - bh) / 2.0f;
                                 SDL_FRect dst = {tx, ty, static_cast<float>(bw), static_cast<float>(bh)};
                                 SDL_SetTextureBlendMode(bestTex, SDL_BLENDMODE_BLEND);
@@ -960,8 +1132,14 @@ public:
 
             // After drawing border and chrome, draw overlay chrome elements such as resize handle and drag indicator
             // so they appear above any child content and border.
-            if (win->resizable && win->isHovered) {
-                drawResizeHandle(x, y, w, h);
+            if (win->resizable && win->resizeHandleHot) {
+                float handleRegionX = x;
+                float handleRegionY = useBodyTexture ? bodyDrawY : y;
+                float handleRegionW = w;
+                float handleRegionH = useBodyTexture ? bodyDrawH : h;
+                float insetX = useBodyTexture ? std::max(0.0f, win->contentRight + win->paddingRight) : 0.0f;
+                float insetY = useBodyTexture ? std::max(0.0f, win->contentBottom + win->paddingBottom) : 0.0f;
+                drawResizeHandle(handleRegionX, handleRegionY, handleRegionW, handleRegionH, insetX, insetY);
             }
 
             if (win->isBeingDragged) {
@@ -1004,7 +1182,7 @@ private:
                 std::string label = b->label;
                 if (!label.empty()) {
                     int fontSize = 14;
-                    TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                    FontManager::FontInstance* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
                     if (font) {
                         SDL_Color textColor = { b->textColor.r, b->textColor.g, b->textColor.b, static_cast<Uint8>(b->textColor.a * b->opacity) };
                         int tw = 0, th = 0;
@@ -1025,7 +1203,7 @@ private:
             if (BangUI::impl::LabelImpl* l = dynamic_cast<BangUI::impl::LabelImpl*>(element)) {
                 if (!l->visible) return;
                 int fontSize = l->fontSize > 0 ? l->fontSize : 14;
-                TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+                FontManager::FontInstance* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
                 if (!font) return;
                 SDL_Color textColor = { l->textColor.r, l->textColor.g, l->textColor.b, static_cast<Uint8>(l->textColor.a * l->opacity) };
 
@@ -1092,30 +1270,13 @@ private:
             }
         }
     }
-    // Draw close button X
-    void drawCloseButton(float x, float y, float size) {
-        float margin = 4;
-        float x1 = x + margin;
-        float y1 = y + margin;
-        float x2 = x + size - margin;
-        float y2 = y + size - margin;
-
-        // Draw X with thick lines
-        for (int offset = -1; offset <= 1; offset++) {
-            SDL_RenderLine(renderer, x1 + offset, y1, x2 + offset, y2);
-            SDL_RenderLine(renderer, x2 + offset, y1, x1 + offset, y2);
-            SDL_RenderLine(renderer, x1, y1 + offset, x2, y2 + offset);
-            SDL_RenderLine(renderer, x2, y1 + offset, x1, y2 + offset);
-        }
-    }
-
     // Draw resize handle indicator (triangle in bottom-right corner)
-    void drawResizeHandle(float winX, float winY, float winW, float winH) {
+    void drawResizeHandle(float regionX, float regionY, float regionW, float regionH, float insetX = 0.0f, float insetY = 0.0f) {
         float handleSize = Window::RESIZE_HANDLE_SIZE;
-        float x1 = winX + winW - handleSize;
-        float y1 = winY + winH - handleSize;
-        float x2 = winX + winW;
-        float y2 = winY + winH;
+        float x1 = regionX + regionW - handleSize - insetX;
+        float y1 = regionY + regionH - handleSize - insetY;
+        float x2 = regionX + regionW - insetX;
+        float y2 = regionY + regionH - insetY;
 
         // Draw a filled triangle with 50% transparency gray
         SDL_SetRenderDrawColor(renderer, 128, 128, 128, 128);
@@ -1146,7 +1307,7 @@ private:
         if (!element) return;
         if (BangUI::impl::LabelImpl* l = dynamic_cast<BangUI::impl::LabelImpl*>(element)) {
             int fontSize = l->fontSize > 0 ? l->fontSize : 14;
-            TTF_Font* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
+            FontManager::FontInstance* font = fontManager->loadFont("C:/Windows/Fonts/arial.ttf", fontSize);
             if (!font) return;
             SDL_Color textColor = {255,255,255,255};
             std::string text = l->text.empty() ? l->properties["text"] : l->text;

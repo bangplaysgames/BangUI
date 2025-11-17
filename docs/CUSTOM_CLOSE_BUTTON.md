@@ -1,5 +1,9 @@
 # Custom Close Button Texture
 
+> **Note:** The original implementation details referenced SDL-renderer calls.
+> All such APIs are now provided by BangUI's software renderer, so no external
+> SDL runtime is required when following this guide.
+
 BangUI windows now support custom textures for the close button via the `closeSrc` property.
 
 ## Overview

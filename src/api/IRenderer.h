@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Types.h"
+#include "Theme.h"
 
 // Forward declarations for managers provided by the concrete renderer implementation.
 class TextureManager;
@@ -20,6 +21,9 @@ public:
     // Access managers for loading textures and fonts
     virtual ::TextureManager* getTextureManager() = 0;
     virtual ::FontManager* getFontManager() = 0;
+
+    // Background rendering for the application window
+    virtual void renderBackground(const BackgroundTheme& theme, float width, float height) = 0;
 
     // High-level rendering entry points used by UIManager/demo
     virtual void renderPanel(const IPanel* panel) = 0;

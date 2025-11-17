@@ -1,5 +1,9 @@
 # Texture Support in BangUI
 
+> **Note:** This document originally referenced SDL3/SDL_image. BangUI now
+> provides the same functionality through its embedded software renderer and
+> stb_image loader, so no external SDL runtime is required.
+
 BangUI now supports loading and rendering textures on Windows and Panels with proper alpha channel handling and color blending.
 
 ## Features

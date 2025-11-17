@@ -1,14 +1,15 @@
 // Single-include header for BangUI convenience. This is the canonical consumer
 // include: applications should `#include "BangUI.h"` to get the public API.
 //
-// Note: BangUI provides built-in input handling within the library (UIManager
-// processes SDL events by default). Applications may override or intercept
-// input handling by subclassing `BangUI::UIManager` or by calling
+// Note: BangUI provides built-in input handling within the library using the
+// lightweight UIEvent abstraction. Applications may override or intercept input
+// handling by subclassing `BangUI::UIManager` or by calling
 // `setEventInterceptor()` on the manager instance.
 #pragma once
 
 // Public API headers
 #include "../api/UIElement.h"
+#include "../api/Theme.h"
 
 // Models
 #include "../impl/PanelImpl.h"

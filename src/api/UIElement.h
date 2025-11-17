@@ -55,6 +55,8 @@ public:
     Color backgroundColor = Color{255,255,255,255};
     // Default text color for elements that render text. Use white by default.
     Color textColor = Color{255,255,255,255};
+    // Optional title-specific color (used by window captions). Leave alpha 0 to fall back to textColor.
+    Color titleTextColor = Color{0,0,0,0};
     std::string src;
     float borderWidth = 0.0f;
     Color borderColor = Color{0,0,0,255};
